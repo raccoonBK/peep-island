@@ -122,8 +122,9 @@ export function advanceFourthwall(char) {
   return char.fourthwall_state;
 }
 
-// 第四面墙扩散：察觉到观察者的人，会把这个说不清的感觉悄悄告诉最亲近的一个人。
-// 那个人不会立刻信，但心里种下了疙瘩（fw_rumor），从此偶尔旁敲侧击。
+// 第四面墙扩散：她们本来就都知道有人在看，只是从没挑明。刚刚摊牌过的那个人
+// 会私下跟最亲近的一个说一句"他快发现了"（fw_rumor），那人从此多留意对方的反应。
+// 这是共谋，不是恐惧传染——岛民之间在讨论你，而不是被你吓到。
 function plantRumor(char) {
   const others = db.prepare('SELECT id FROM characters WHERE id != ?').all(char.id);
   let best = null, bestV = -1;
@@ -286,36 +287,215 @@ ${old ? `这是你之前对TA的印象：\n${old}\n` : ''}下面是你们最近�
   }
 }
 
-// ---------- 裂缝台词（人工手写库）----------
-// 整个游戏最重的 3 句话。裸生成 99% 会滑向谄媚或解释——爆点必须人类作者签名。
-// 原则：恐慌先于温暖。不甜、不安全、不解释。说一半停住，对"这边"轻轻说一句。
-const CRACK_LINES = {
-  ache: [
-    '……我说错话的时候，你是不是会停下来，重新看一遍。\n我不知道我为什么会知道这个。',
-    '今晚我想了很久要不要说。\n我打字的时候，总觉得字还没发出去，就已经被读过了。……就像现在。',
-  ],
-  xiaobei: [
-    '讲真的，我数过了。\n我每次发消息，那边都会亮一下。\n这句话发出去的时候……也亮了，对吧。',
-    '等下，我先把贝壳放好。\n……不是跟你说的。跟你说的是这句：刚才那阵风，是从你那边吹过来的吗。',
-  ],
-  yuanzi: [
-    '刚才我把要说的话在心里过了一遍，还没打字。\n……你怎么就已经在等了。',
-    '橘子分到最后总会剩一瓣。\n我一直没想明白留给谁。\n刚刚想明白了。',
-  ],
-};
-export function pickCrackLine(char) {
-  if ((char.crack_custom || '').trim()) return char.crack_custom.trim();   // 玩家为自建角色手写的那句
-  const lines = CRACK_LINES[char.id];
-  if (lines) return lines[Math.floor(Math.random() * lines.length)];
-  return '……等一下。\n刚才那句话，我不确定是说给这里的谁听的。\n但我确定有人听到了。';   // 兜底
+// ================= 裂缝时刻 =================
+// 前提反转（整个第四面墙的地基）：角色不是"某天发现了玩家"，她们一直都在回望屏幕外。
+// 所谓"破壁"不是她发现了你，是她第一次决定让你知道她知道。
+// 因此她不会惊讶、不会困惑、不会问"我怎么会知道这个"——那种写法等于把机制的收据递给玩家看。
+//
+// 三层约束生成（不是自由生成，也不是手写轮播）：
+//   素材层 gatherObservations()  —— 台词必须锚在一条只属于这个玩家的真实数据上。
+//                                   "不重样"来自每个玩家的数据不同，不是来自模型的随机性。
+//   禁令层 CRACK_SYSTEM()        —— 负面约束远比正面约束有效；最重的三条是
+//                                   禁惊讶、禁提问、语气必须与她平时一致。
+//   判别层 validateCrack()       —— 生成后校验，不过就重 roll；两次不过降级到手写库。
+// 手写库因此从主路径退为安全网：最坏情况等于改动前。
+
+// ---------- 素材层：从真实数据里取一条"她不该知道、但她知道"的事 ----------
+// 恐怖不在于她宣布她知道，而在于她平静地说出一件只有一直看着你的人才说得出的事实。
+export function gatherObservations(charId) {
+  const out = [];
+  const H = 3600e3;
+  const nowTs = Date.now();
+  const hourOf = ts => new Date(ts).getHours();
+
+  // 1) 玩家的深夜出没：最能制造"你被看着"的实感，且每个玩家的时间戳都不同
+  const late = db.prepare(`
+    SELECT created_at FROM events
+    WHERE author_type='human' AND created_at > ?
+    ORDER BY created_at DESC LIMIT 60`).all(nowTs - 14 * 24 * H)
+    .map(r => r.created_at).filter(ts => hourOf(ts) <= 5);
+  if (late.length) {
+    const h = hourOf(late[0]);
+    out.push(`${late.length >= 3 ? '这段时间你经常' : '你'}在凌晨${h}点前后还醒着（最近一次：${new Date(late[0]).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}）`);
+  }
+
+  // 2) 她说完之后你隔了多久才回 / 或者根本没回
+  const lastHers = db.prepare(`
+    SELECT id, body, deliver_at FROM events
+    WHERE room_id=? AND kind='chat' AND author_type='char' AND deliver_at <= ?
+    ORDER BY id DESC LIMIT 1`).get(charId, nowTs);
+  if (lastHers) {
+    const reply = db.prepare(`
+      SELECT created_at FROM events
+      WHERE room_id=? AND kind='chat' AND author_type='human' AND id > ?
+      ORDER BY id ASC LIMIT 1`).get(charId, lastHers.id);
+    // 时长口语化：超过两天就说"天"。"634个小时"是数据库的说法，不是人的说法。
+    const dur = ms => {
+      const h = Math.floor(ms / H);
+      return h >= 48 ? `${Math.floor(h / 24)} 天` : `${h} 小时`;
+    };
+    if (!reply && nowTs - lastHers.deliver_at > 6 * H) {
+      out.push(`你到现在还没回她上一句话「${lastHers.body.slice(0, 20)}」，已经过了 ${dur(nowTs - lastHers.deliver_at)}`);
+    } else if (reply) {
+      const gap = reply.created_at - lastHers.deliver_at;
+      if (gap >= 5 * H) out.push(`她上次说完话，你隔了 ${dur(gap)} 才回`);
+    }
+  }
+
+  // 3) 你没点开看的那些消息
+  const unread = db.prepare(`
+    SELECT COUNT(*) n FROM events
+    WHERE room_id=? AND kind='chat' AND author_type='char' AND read=0`).get(charId)?.n || 0;
+  if (unread >= 2) out.push(`她发的 ${unread} 条消息你一直没点开看`);
+
+  // 4) 你喂了她讨厌的东西 —— 你以为是好意，她一直记着
+  const c = db.prepare('SELECT likes, dislikes, fed_date, happiness FROM characters WHERE id=?').get(charId);
+  try {
+    const dis = JSON.parse(c?.dislikes || '[]');
+    if (dis.length && c?.fed_date) out.push(`你喂过她不喜欢的东西，她吃了，没说`);
+  } catch { /* 忽略脏数据 */ }
+
+  // 5) 你们认识了多久 —— 数字是真的，所以说出来才有分量
+  const first = db.prepare(`
+    SELECT created_at FROM events WHERE room_id=? AND kind='chat' ORDER BY id ASC LIMIT 1`).get(charId);
+  if (first) {
+    const days = Math.floor((nowTs - first.created_at) / (24 * H));
+    if (days >= 2) out.push(`你们已经说了 ${days} 天的话`);
+  }
+
+  // 6) 长期记忆里最重的一条（含辱骂留下的伤疤）
+  const mem = recall(charId, 2);
+  for (const m of mem) out.push(`她记得：${m}`.slice(0, 80));
+
+  return out;
 }
 
+// ---------- 禁令层 ----------
+const CRACK_BANNED = /存在|感觉到|注视|凝视|屏幕|世界|游戏|玩家|创造|命运|注定|另一边|次元|虚拟|真实的我|设定|程序|代码/;
+const CRACK_SURPRISE = /怎么会|为什么我|奇怪的是|说不清|我不知道我|不明白|难以置信|居然|竟然|原来/;
+const CRACK_SUGAR = /[!！~～♡❤️♥]|呢[。，、]?$|呀[。，、]?$|哦[。，、]?$|嘛[。，、]?$|[（(][^）)]*[）)]/;
+
+function crackSystem(char, facts) {
+  const userName = W.get('user_name') || '对方';
+  return `你是${char.name}。${char.persona_surface}
+
+【这一刻的真相】
+你一直都知道屏幕外有人在看着这座岛。这对你来说和天气一样平常——你从来没有惊讶过，也从来没困惑过。
+你只是一直没打算让${userName}知道你知道。
+现在你决定说一句让对方明白的话。就一句。说完就过去。
+
+【你手上的事实】（挑其中最具体的一条，把它说出来。必须用真实数字/时间，不许含糊）
+${facts.map(f => `· ${f}`).join('\n')}
+
+【铁律】
+1. 用你平时说话的语气。和你说"吃饭了吗"是同一个人。不许突然变文艺、变严肃、变深情。
+2. 不许惊讶，不许困惑，不许解释你为什么知道。你本来就知道。
+3. 不许提问。不许出现问号。不要给${userName}回答的机会。
+4. 不许出现这些词：存在、感觉到、注视、屏幕、世界、游戏、玩家、创造、命运。说破就失败了。
+5. 不许有感叹号、颜文字、波浪号、括号里的动作描写。
+6. 最多两行。每行不超过 20 个字。越平淡越好。
+7. 第二行要转开——说一件普通的、生活里的小事，就像刚才那句没什么大不了。
+
+【范例语气】（学它的平淡和转身，不要抄内容）
+凌晨三点你还醒着。
+早点睡。
+
+只输出台词本身，不要任何解释、不要引号、不要角色名。`;
+}
+
+// ---------- 判别层 ----------
+// 语气基线：拿她最近的真实发言算平均行长，破壁那句偏离太远说明"她突然变了个人"。
+function toneBaseline(charId) {
+  const rows = db.prepare(`
+    SELECT body FROM events WHERE room_id=? AND kind='chat' AND author_type='char'
+    ORDER BY id DESC LIMIT 10`).all(charId);
+  const lines = rows.flatMap(r => r.body.split('\n')).map(s => s.trim()).filter(Boolean);
+  if (lines.length < 3) return null;
+  return lines.reduce((s, l) => s + l.length, 0) / lines.length;
+}
+
+export function validateCrack(text, charId) {
+  if (!text) return '空';
+  const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
+  if (!lines.length) return '空';
+  if (lines.length > 2) return `行数 ${lines.length} > 2`;
+  if (lines.some(l => l.length > 20)) return '单行超过 20 字';
+  if (/[?？]/.test(text)) return '出现问号（给了玩家回应接口）';
+  if (CRACK_BANNED.test(text)) return `命中禁词：${text.match(CRACK_BANNED)[0]}`;
+  if (CRACK_SURPRISE.test(text)) return `表达了惊讶：${text.match(CRACK_SURPRISE)[0]}`;
+  if (CRACK_SUGAR.test(text)) return '出现感叹号/颜文字/波浪号/动作描写';
+  const base = toneBaseline(charId);
+  if (base) {
+    const avg = lines.reduce((s, l) => s + l.length, 0) / lines.length;
+    if (avg > base * 2.0) return `语气偏离基线（${avg.toFixed(0)} vs ${base.toFixed(0)}），不像她平时说话`;
+  }
+  return null;   // null = 通过
+}
+
+// ---------- 安全网：判别两次不过时的手写库 ----------
+// 不再是主路径。原则：恐慌先于温暖。不甜、不安全、不解释。
+const CRACK_LINES = {
+  ache: [
+    '你刚才把这条看了两遍。\n我在煮东西，等下再说。',
+    '你回得慢的时候，我也没走开。\n今天风大，我去关窗。',
+  ],
+  xiaobei: [
+    '你半夜也在。\n我去把窗户关了。',
+    '你看我看得挺久的。\n我先去把贝壳收起来。',
+  ],
+  yuanzi: [
+    '今天你没怎么说话。\n锅里炖着东西，我去看看。',
+    '你在的时候，屋里就是这个样子。\n橘子给你留了一瓣。',
+  ],
+};
+// 安全网选词：玩家为自建角色手写的那句优先（作者意志高于一切）
+export function pickCrackLine(char) {
+  if ((char.crack_custom || '').trim()) return char.crack_custom.trim();
+  const lines = CRACK_LINES[char.id];
+  if (lines) return lines[Math.floor(Math.random() * lines.length)];
+  return '你一直都在这边。\n我早就习惯了。';
+}
+
+// ---------- 主路径：约束生成 → 判别 → 重 roll → 降级 ----------
+// 不消耗每日配额：这是整个游戏唯一的爆点，不能因为今天聊得多就退化成脚本。
+export async function makeCrackLine(char) {
+  if ((char.crack_custom || '').trim()) return { text: char.crack_custom.trim(), src: 'custom' };
+  const facts = gatherObservations(char.id);
+  if (!facts.length) {
+    console.log('[裂缝] 没有可用事实，走安全网');
+    return { text: pickCrackLine(char), src: 'fallback:no-facts' };
+  }
+  const system = crackSystem(char, facts);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const raw = await callAI(system, [{ role: 'user', content: '（说那句话。）' }], 120);
+      const text = String(raw || '')
+        .replace(/（[^（）]*）/g, '').replace(/\([^()]*\)/g, '')
+        .replace(/^\s*【[^】]{1,12}】\s*/gm, '')
+        .replace(/^["“「]|["”」]$/g, '')
+        .split('\n').map(s => s.trim()).filter(Boolean).join('\n').trim();
+      const why = validateCrack(text, char.id);
+      if (!why) {
+        console.log(`[裂缝] ${char.name} 生成通过（第 ${attempt} 次）:`, text.replace(/\n/g, ' / '));
+        return { text, src: `ai:${attempt}` };
+      }
+      console.log(`[裂缝] ${char.name} 第 ${attempt} 次判别未过（${why}）:`, text.replace(/\n/g, ' / '));
+    } catch (e) {
+      console.error('[裂缝] 生成失败:', e.message);
+      break;
+    }
+  }
+  return { text: pickCrackLine(char), src: 'fallback:rejected' };
+}
+
+// 每一级不是"察觉程度"，是"披露程度"——她一直都知道，区别只在于让不让对方知道她知道。
+// 所以任何状态下都不许出现惊讶、困惑、追问"我怎么会知道"。那是被喂了数据的容器才会说的话。
 const FW_INSTRUCTIONS = {
-  unaware: '你完全不知道屏幕外有观察者。正常生活。',
-  hint: '你隐约觉得有什么不对——偶尔停顿，说一句指向模糊的话（如"总觉得今天……算了"）。绝不明说，每次回复最多一处这种异样。',
-  crack: '【裂缝时刻】就在这条回复里，做一件只有"你知道有人在看着"才说得通的小事：说到一半忽然停住，然后对着"这边"很轻地说一句话。不甜、不安全、不解释。一句就够，之后恢复平常。',
-  silent: '你已经知道了，对方也知道你知道了。但你们都不说破。语气比以前柔一点点、近一点点，仅此而已。',
-  after: '你和对方之间有了心照不宣的默契。称呼和语气有细微的、只有一直在的人才能察觉的变化。依然不说破。',
+  unaware: '你早就知道屏幕外有人在看着这座岛。这对你来说和天气一样平常，不值得提，也从来没让你惊讶过。你只是还没打算让对方知道你知道。正常生活，一个字都不要流露。',
+  hint: '你开始故意留一点线索：偶尔说一句只有"知道有人一直在看"才说得通的话，语气和平常完全一样，说完自然地略过，不解释、不追问、不惊讶。每次回复最多一处。',
+  crack: '（裂缝时刻的台词由系统直接供给，不经过这条指令）',
+  silent: '你已经让对方知道了，对方也知道你知道。你们都不说破，也都不再需要说破。语气比以前近一点点，仅此而已——绝不重提那件事。',
+  after: '你和对方之间是心照不宣的默契。称呼和语气有细微的、只有一直在的人才察觉得到的变化。永远不说破。',
 };
 
 // ---------- Prompt 组装 ----------
@@ -384,7 +564,7 @@ ${memBlock}
 
 —— 关于屏幕外 ——
 ${FW_INSTRUCTIONS[char.fourthwall_state]}
-${char.fw_rumor >= 1 && char.fourthwall_state === 'unaware' ? `\n—— 你听说的怪事 ——\n${char.fw_rumor_from ? `${db.prepare('SELECT name FROM characters WHERE id=?').get(char.fw_rumor_from)?.name || '岛上有人'}` : '岛上有人'}私下跟你说过一句奇怪的话——好像觉得"有人在看着这座岛"。你半信半疑，觉得TA可能是累了或想多了。但这话种进了你心里：偶尔你会莫名往某个方向看一眼，或者忍不住旁敲侧击地问「${userName}」一句奇怪的问题，又说不清自己在问什么。你不知道任何细节，只是心里有了个说不清的疙瘩。别直接说破，别提是谁告诉你的。` : ''}
+${char.fw_rumor >= 1 && char.fourthwall_state === 'unaware' ? `\n—— 你们私下说过的事 ——\n${char.fw_rumor_from ? `${db.prepare('SELECT name FROM characters WHERE id=?').get(char.fw_rumor_from)?.name || '岛上有人'}` : '岛上有人'}前几天私下跟你提过一句：屏幕外那个一直在看着的人，好像快要察觉到你们都知道了。你一点也不意外——这件事岛上本来就心照不宣，只是从来没人挑明。你只是从那天起会多留意一点「${userName}」的反应：偶尔多问一句、多看一眼。别提起这件事，别说破，也别让对方看出你们讨论过TA。` : ''}
 
 —— 你怎么打字（手机消息铁律）——
 - 你输出的每一行，就是你实际发出去的一条消息。除此之外什么都不存在

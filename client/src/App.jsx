@@ -753,10 +753,16 @@ function CrackOverlay({ text, onDone }) {
       i += 1;
       setShown(text.slice(0, i));
       const ch = text[i - 1];
-      const pause = '，。…！？—'.includes(ch) ? 460 : 95 + Math.random() * 75;
+      // 打字速度必须慢于阅读速度：让玩家被迫等她把话说完，等待本身就是演出。
+      // 换行停最久——第二行是她转身说的那句日常话，停顿让它显得更冷。
+      const pause = ch === '\n' ? 1400
+        : '，。…！？—'.includes(ch) ? 620
+          : 130 + Math.random() * 90;
       setTimeout(tick, pause);
     };
-    const t0 = setTimeout(tick, 1600);
+    // 黑屏之后先什么都不发生。这 2.6 秒里玩家会怀疑是不是卡了——
+    // 那个"以为是 bug"的瞬间正是恐怖的来源：它模糊了游戏和系统的边界。
+    const t0 = setTimeout(tick, 2600);
     return () => { alive = false; clearTimeout(t0); try { ctx && ctx.close(); } catch {} };
   }, [text]);
   return (

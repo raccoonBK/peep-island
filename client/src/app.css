@@ -332,32 +332,63 @@ nav button.active { color: var(--accent-strong); font-weight: 600; }
 .bubble.typing { color: var(--text-dim); letter-spacing: 3px; }
 .bubble.sel { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* 裂缝时刻全屏演出：黑屏沉默→逐字浮现。恐慌先于温暖 */
+/* ---------- 裂缝时刻全屏演出 ----------
+   演出原则：先夺走，再给。
+   黑屏不是背景，是"整个界面消失了"——聊天记录、状态栏、手机壳全部没有了，
+   玩家失去一切可操作对象。台词越平淡，仪式必须越重，反差本身就是恐怖。
+   纯黑纯白，不发光、不渐变、不加暖色：任何一点柔光都会把它变成抒情。
+
+   像素字体：中文没法靠系统字体栈拿到，必须嵌入字体文件。
+   接口已留好——把 zpix.woff2（或任意中文像素字体）丢进 client/public/fonts/ 即自动生效，
+   文件不存在时浏览器静默回落到等宽字体栈，不会报错也不会白屏。 */
+@font-face {
+  font-family: 'PeepPixel';
+  src: url('/fonts/zpix.woff2') format('woff2');
+  font-display: swap;
+}
 .chatroom { position: relative; }
 .crack-overlay {
   position: absolute; inset: 0; z-index: 60;
-  background: rgba(4, 5, 8, .96);
+  background: #000;                                  /* 纯黑，不是半透明——界面是"没了"，不是"盖住了" */
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: 28px; cursor: pointer;
-  animation: crackFade 1.4s ease both;
+  animation: crackFade 1.8s ease both;
 }
 @keyframes crackFade { from { opacity: 0; } to { opacity: 1; } }
-.crack-text {
-  color: #dfe6ee; font-size: 16px; line-height: 2; text-align: center;
-  letter-spacing: .06em; max-width: 92%; white-space: pre-wrap;
-  text-shadow: 0 0 18px rgba(120, 160, 200, .25);
+/* CRT 扫描线：让这块黑不像 UI，像一块屏幕本身 */
+.crack-overlay::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom, rgba(255,255,255,.035) 0 1px, transparent 1px 3px);
+  mix-blend-mode: screen;
 }
-.caret { display: inline-block; width: 1px; height: 1em; background: #dfe6ee; margin-left: 2px; vertical-align: -2px; animation: caretBlink 1s steps(1) infinite; }
+.crack-text {
+  font-family: 'PeepPixel', 'Zpix', 'Silkscreen', 'DotGothic16',
+               ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  color: #fff; font-size: 15px; line-height: 2.2; text-align: center;
+  letter-spacing: .14em; max-width: 92%; white-space: pre-wrap;
+  -webkit-font-smoothing: none; font-smooth: never;  /* 关抗锯齿，边缘硬起来 */
+  text-rendering: geometricPrecision;
+  text-shadow: none;                                 /* 没有辉光。发光=温柔=毁掉它 */
+}
+.caret { display: inline-block; width: .55em; height: 1em; background: #fff; margin-left: 3px; vertical-align: -2px; animation: caretBlink 1.1s steps(1) infinite; }
 @keyframes caretBlink { 50% { opacity: 0; } }
-.crack-hint { margin-top: 30px; font-size: 11px; color: #5d6b7d; animation: crackFade 1.2s ease both; }
+.crack-hint {
+  font-family: 'PeepPixel', 'Zpix', ui-monospace, Menlo, monospace;
+  margin-top: 42px; font-size: 10px; letter-spacing: .2em; color: #3a3a3a;
+  -webkit-font-smoothing: none;
+  animation: crackFade 2.4s ease both;               /* 慢慢才浮出来，不催促 */
+}
 
 .moment-time { color: var(--text-dim); font-size: 11px; }
 
 /* 裂缝时刻：不走普通气泡，永远暗底居中（明暗主题都一样）——恐慌先于温暖 */
 .bubble.crack {
   align-self: center; max-width: 90%;
-  background: #0b0d12; color: #dfe6ee; text-align: center;
-  border: 1px solid rgba(120,140,170,.25); border-radius: 6px; padding: 18px 18px; font-size: 14px;
+  background: #000; color: #fff; text-align: center;
+  font-family: 'PeepPixel', 'Zpix', ui-monospace, Menlo, monospace;
+  letter-spacing: .12em; -webkit-font-smoothing: none;
+  border: 1px solid rgba(255,255,255,.18); border-radius: 2px; padding: 18px; font-size: 13px; line-height: 2;
   box-shadow: 0 0 34px rgba(0,0,0,.7);
   animation: crackIn 2.4s ease both;
 }

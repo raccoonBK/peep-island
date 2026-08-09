@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db, W } from './db.js';
-import { charSay, advanceFourthwall, remember, timeSlot, sleepInfo, summarizeRoom, pickCrackLine, activityInfo, updateImpressions, getRel, bumpRel, makeEncounter, findEncounterPair, listProviders, setProvider } from './brain.js';
+import { charSay, advanceFourthwall, remember, timeSlot, sleepInfo, summarizeRoom, pickCrackLine, makeCrackLine, activityInfo, updateImpressions, getRel, bumpRel, makeEncounter, findEncounterPair, listProviders, setProvider } from './brain.js';
 
 const app = express();
 app.use(express.json());
@@ -116,7 +116,7 @@ app.post('/api/open', async (req, res) => {
           // 1/3 概率带着烦恼来（岛上会冒气泡，你回复=处理了它）
           const isWorry = fw !== 'crack' && !c.worry_level && Math.random() < 0.34;
           const m = fw === 'crack'
-            ? { text: pickCrackLine(c), ai: true }                    // 爆点永远手写，绝不即兴
+            ? { text: (await makeCrackLine(c)).text, ai: true }       // 约束生成 → 判别 → 不过则降级手写库
             : await charSay(c, 'chat', isWorry
               ? '（你有件小烦恼想找TA商量——一件具体的、贴合你性格和最近生活的小事。把烦恼说出来，问问TA怎么看）'
               : FLAVORS[Math.floor(Math.random() * FLAVORS.length)]);
@@ -310,9 +310,9 @@ app.post('/api/rooms/:charId/reply', async (req, res) => {
   }
 
   const fw = advanceFourthwall(char);
-  // 裂缝时刻：台词来自手写库，不走生成——整个游戏最重的一句话不许即兴
+  // 裂缝时刻：约束生成（锚在只属于这个玩家的真实数据上）→ 判别层守门 → 两次不过降级到手写库
   const reply = fw === 'crack'
-    ? { text: pickCrackLine(char), ai: true }
+    ? { text: (await makeCrackLine(char)).text, ai: true }
     : await charSay({ ...char, fourthwall_state: fw }, 'chat', extraCtx);
 
   // 延迟在生成"之后"起算，不被 API 耗时吃掉：看到 → 想了想 → 才回
