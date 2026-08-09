@@ -27,3 +27,6 @@ Thumbs.db
 *.swp
 *.log
 npm-debug.log*
+
+# 截图：含破壁剧透 + 体积大，不进公开仓库
+screenshots/
