@@ -595,6 +595,25 @@ app.get('/api/rooms/:charId/debug', (req, res) => {
   });
 });
 
+// 演示入口：正常流程下裂缝时刻要亲密度 50 + 真实等 24 小时，评审／演示等不起。
+// 这条路由直接生成并投递一次裂缝，不改角色状态机（她的真实进度不受影响）。
+// 走的是完整的三层约束生成，所以看到的就是实机效果，不是预设脚本。
+// 同时挂 GET：演示时直接在浏览器地址栏打开即可，不需要 curl（有副作用，仅演示用）
+app.all('/api/rooms/:charId/demo-crack', async (req, res) => {
+  const c = db.prepare('SELECT * FROM characters WHERE id=?').get(req.params.charId);
+  if (!c) return res.status(404).json({ error: 'no such character' });
+  try {
+    const { text, src } = await makeCrackLine(c);
+    const ev = addEvent({
+      authorId: c.id, authorType: 'char', kind: 'chat', roomId: c.id,
+      body: text, meta: { fx: 'crack', demo: true }, read: 0,
+    });
+    res.json({ ok: true, id: ev.id, text, src });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---------- 人设（ownwe 式自定义 prompt 导入 + 自写裂缝台词）----------
 app.get('/api/characters/:id', (req, res) => {
   const c = db.prepare('SELECT id,name,avatar,persona_surface,persona_inner,quirks,custom_prompt,crack_custom,look FROM characters WHERE id=?').get(req.params.id);
