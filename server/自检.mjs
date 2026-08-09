@@ -9,7 +9,7 @@
 //
 // 用法：cd server && node --env-file=.env 自检.mjs
 
-const { enforce, checkReply, validateCrack } = await import('./brain.js');
+const { enforce, checkReply, validateCrack, stripBad } = await import('./brain.js');
 
 let pass = 0, fail = 0;
 const t = (name, got, want) => {
@@ -43,12 +43,27 @@ t('明喻「仿佛」', bad('仿佛什么都没发生'), true);
 t('编造做法：煮橘子（把字句，动词在后）', bad('把冻的橘子全煮了'), true);
 t('编造做法：煮橘子（正序）', bad('我煮了一锅橘子'), true);
 t('编造做法：烤橘子皮', bad('我烤了点橘子皮'), true);
+t('编造做法：烤整个橘子', bad('烤了两个橘子当宵夜'), true);
+t('不误伤：烤地瓜', bad('烤了两个红薯'), false);
 t('破设定', bad('作为一个AI我没有情感'), true);
 t('不误伤「好像」', bad('好像下雨了'), false);
 t('不误伤「像是」', bad('像是这样吧'), false);
 t('不误伤「不像话」', bad('你这人真不像话'), false);
 t('不误伤正常橘子句', bad('给你留了一瓣橘子'), false);
+t('明喻「像…那一下」', bad('这雾好厚，像蒸笼盖子掀开那一下'), true);
+t('明喻「像…的时候」', bad('像刚睡醒的时候'), true);
 t('普通句子放行', bad('今天风大，我去关窗。'), false);
+
+console.log('\n【兜底切除：重 roll 也失败时】');
+t('切掉犯规句，留下干净的',
+  stripBad('这雾好厚，像蒸笼盖子掀开那一下。等散了我去买菜。'), '等散了我去买菜。');
+t('切掉编造做法那句',
+  stripBad('我烤了点橘子皮。外面风挺大的。'), '外面风挺大的。');
+t('量词表覆盖「场/阵」', bad('像一场雾'), true);
+t('全都犯规 → 保留原文，不能变哑巴',
+  stripBad('像一锅汤。像一场雾。'), '像一锅汤。像一场雾。');
+t('单句不动刀', stripBad('像一锅慢慢煨着的汤'), '像一锅慢慢煨着的汤');
+t('干净文本原样通过', stripBad('今天风大。我去关窗。'), '今天风大。我去关窗。');
 
 console.log('\n【裂缝时刻判别器】');
 const crackOk = (s) => validateCrack(s, '__nonexistent__') === null;

@@ -596,10 +596,12 @@ const REPLY_BAD = [
   [/(像|跟|如同|好比)[^，。！？\n]{1,12}(一样|似的|那样)|就像[^，。\n]{1,14}|仿佛|宛如|犹如/, '打比方'],
   // "像一锅慢慢煨着的汤"这种没有"一样"结尾，逃得过上面那条。
   // 像 + 量词几乎必然是明喻（"好像""像是"不带量词，不会误伤）。
-  [/像[一两半]?[个只条根锅盆碗把张团片块颗粒扇道堵面]/, '打比方'],
+  [/像[一两半]?[个只条根锅盆碗把张团片块颗粒扇道堵面场阵顿层幕出坨捧团]/, '打比方'],
+  // "像蒸笼盖子掀开那一下"——没有"一样/似的"结尾，前两条都抓不到。
+  [/像[^，。！？\n]{2,12}(那一下|那会儿|的时候|那样子|的感觉)/, '打比方'],
   // 中文的"把"字句动词在后（把橘子煮了），所以两个语序都要抓——
   // 只写"煮…橘子"会漏掉用户当初贴的那句原话。
-  [/煮[^，。\n]{0,4}(橘子|石头)|(橘子|石头)[^，。\n]{0,4}煮|烤[^，。\n]{0,4}(橘子皮|果皮)|(橘子皮|果皮)[^，。\n]{0,4}烤/, '编造没人这么干的做法'],
+  [/[煮烤][^，。\n]{0,4}(橘子皮|果皮|橘子|石头)|(橘子皮|果皮|橘子|石头)[^，。\n]{0,4}[煮烤]/, '编造没人这么干的做法'],
   [/作为(一个)?(AI|人工智能|语言模型)/, '破设定'],
 ];
 export function checkReply(text) {
@@ -607,14 +609,27 @@ export function checkReply(text) {
   return null;
 }
 
+// 重 roll 也没过时的兜底：按句切开，把犯规的那句删掉，留下干净的部分。
+// 比再 roll 一次便宜（不多花一次调用），也比整条放行强。
+// 但如果删完什么都不剩，就还是用原文——"话说得不完美"永远好过"角色变哑巴"。
+export function stripBad(text) {
+  const parts = String(text || '').split(/(?<=[。！？!?\n])/).filter(Boolean);
+  if (parts.length < 2) return text;
+  const kept = parts.filter(p => !checkReply(p)).join('').trim();
+  return kept.length >= 2 ? kept : text;
+}
+
 // ---------- 口头禅去重 ----------
 // 求模型"少说点口头禅"没用，它看不见自己刚说过什么。所以把它最近的开头
 // 统计出来贴回 prompt 里——让它看见证据，比给它规矩有效。
 // 这条是通用的：不写死"讲真的"，而是逮住它这阵子恰好在滥用的任何说法。
 function catchphraseGuard(charId) {
+  // 按 author_id 取，不按 room_id —— 聊天在自己房间，动态和评论在 feed 里。
+  // 只查聊天的话，朋友圈那条路径就没有去重，会一直在同一个母题里打转
+  // （实测抽检 6 条动态，6 条都在讲食物、橘子出现 3 次）。
   const rows = db.prepare(`
-    SELECT body FROM events WHERE room_id=? AND kind='chat' AND author_type='char'
-    ORDER BY id DESC LIMIT 12`).all(charId);
+    SELECT body FROM events WHERE author_id=? AND author_type='char'
+    ORDER BY id DESC LIMIT 14`).all(charId);
   if (rows.length < 4) return '';
   const heads = {};
   for (const r of rows) {
@@ -912,6 +927,7 @@ export async function charSay(char, kind, extraUserMsg = null) {
         system + `\n\n【上一次你写砸了：${why}】重写。绝对不许出现"像…一样""跟…似的""就像""仿佛"这类比喻，也不许编造现实里没人这么做的食物做法。直接说事。`,
         messages);
       if (retry && !checkReply(retry)) raw = retry;
+      else raw = stripBad(retry && checkReply(retry) ? retry : raw);   // 两次都没过 → 切掉犯规的那句
     }
     let text = raw;
     // 机制性执法（prompt 会被违反，后处理不会）：

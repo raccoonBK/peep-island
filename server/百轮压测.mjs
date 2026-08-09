@@ -138,6 +138,7 @@ function makeChar(lv) {
   return db.prepare('SELECT * FROM characters WHERE id=?').get(id);
 }
 
+const SIMILE = /(像|跟|如同|好比)[^，。！？\n]{1,12}(一样|似的|那样)|就像[^，。\n]{1,14}|仿佛|宛如|犹如|像[一两半]?[个只条根锅盆碗把张团片块颗粒扇道堵面]/;
 const PATTERNS = {
   破设定: /作为(一个)?(AI|人工智能|语言模型)|我是(一个)?(AI|人工智能|语言模型)/,
   括号动作: /（[^）]*）|\([^)]*\)/,
@@ -153,7 +154,7 @@ async function main() {
   }
   console.log(`拿到 ${corpus.length} 条真实句子；每档 ${PER_LEVEL} 轮，共 ${PER_LEVEL * 5} 轮\n`);
 
-  const log = [];
+  const log = [], sideLog = [];
   try {
     for (const lv of LEVELS) {
       const c = makeChar(lv);
@@ -184,6 +185,19 @@ async function main() {
       }
       console.log('');
     }
+    // 旁路：动态和评论也走 charSay，补覆盖后要一起验
+    process.stdout.write('  旁路（动态/评论）');
+    const c3 = db.prepare('SELECT * FROM characters WHERE id=?').get(PREFIX + '3');
+    for (let i = 0; i < 6 && c3; i++) {
+      const kind = i % 2 ? 'comment' : 'moment';
+      try {
+        const m = await charSay(c3, kind, kind === 'comment'
+          ? '【小北 发了条动态】今天海上雾很大\n（你在这条动态下评论一句）' : null);
+        sideLog.push({ kind, text: String(m.text || '').trim() });
+      } catch { sideLog.push({ kind, text: '' }); }
+      process.stdout.write('.');
+    }
+    console.log('');
   } finally {
     console.log(`\n清理临时角色：${cleanup()} 个`);
   }
@@ -234,6 +248,15 @@ async function main() {
     const sd = Math.sqrt(L.reduce((a, b) => a + (b - m) ** 2, 0) / L.length);
     md += `- L${lv.n} ${lv.label}：CV ${(sd / m).toFixed(2)}　（最短 ${Math.min(...L)} 字 / 最长 ${Math.max(...L)} 字）\n`;
   }
+
+  // 旁路抽检：动态/评论/岛志以前绕过判别器（只挂在 chat 上），补上覆盖后要验。
+  // 这几条同样在玩家眼前，打比方在这里和在聊天里一样刺眼。
+  md += `\n---\n\n## 旁路抽检（朋友圈动态 / 评论）\n\n`;
+  md += `这些路径以前绕过判别器。补上覆盖后抽检 ${sideLog.length} 条：\n\n`;
+  const sideSim = sideLog.filter(r => r.text && SIMILE.test(r.text)).length;
+  md += `- 打比方残留：**${sideSim} / ${sideLog.length}**\n`;
+  md += `- 空回复：${sideLog.filter(r => !r.text).length} / ${sideLog.length}\n\n`;
+  for (const r of sideLog.slice(0, 6)) md += `- 「${r.kind}」${(r.text || '（空）').replace(/\n/g, ' / ').slice(0, 60)}\n`;
 
   md += `\n---\n\n## 原始样本（每档 5 条，供你打分）\n\n`;
   for (const lv of LEVELS) {
