@@ -1,0 +1,384 @@
+/* ============================================================
+   窥岛 UI —— 深色优先 + 液态玻璃近似（CSS 版）
+   真·斯涅尔位移图光学 = 心跳验证通过后再上，见 README。
+   这里用 backdrop-filter 毛玻璃 + inset 顶部高光（伪造边缘镜面反射）
+   + 背后柔和色团（让玻璃有东西可折射）拿到 ~80% 观感。
+   ============================================================ */
+
+:root {
+  --accent: #4aa3c7;
+  --accent-strong: #6fc6e6;
+  --text: #e7edf4;
+  --text-dim: #93a1b3;
+  --mine: #2f6f4e;            /* 深色下的墨绿气泡 */
+  --mine-text: #eafff1;
+  --glass: rgba(255, 255, 255, 0.06);
+  --glass-2: rgba(255, 255, 255, 0.10);
+  --glass-edge: rgba(255, 255, 255, 0.14);
+  --glass-hi: rgba(255, 255, 255, 0.30);   /* 顶部镜面高光 */
+  --shadow: 0 10px 30px rgba(0, 0, 0, .45);
+  --blur: blur(20px) saturate(1.5);
+  --page-1: #0e1520;
+  --page-2: #101a2b;
+}
+
+:root[data-theme="light"] {
+  --accent: #2b6e8f;
+  --accent-strong: #2b6e8f;
+  --text: #1f2a36;
+  --text-dim: #8a95a5;
+  --mine: #9adf6f;
+  --mine-text: #14310a;
+  --glass: rgba(255, 255, 255, 0.55);
+  --glass-2: rgba(255, 255, 255, 0.72);
+  --glass-edge: rgba(255, 255, 255, 0.8);
+  --glass-hi: rgba(255, 255, 255, 0.95);
+  --shadow: 0 10px 30px rgba(31, 42, 54, .18);
+  --blur: blur(18px) saturate(1.4);
+  --page-1: #cfe0ea;
+  --page-2: #dfe7f0;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+
+body {
+  min-height: 100vh; display: flex; justify-content: center;
+  color: var(--text);
+  background: radial-gradient(1200px 800px at 20% 0%, var(--page-2), var(--page-1));
+  overflow: hidden;
+}
+/* 背后的柔和色团：玻璃折射的“光源” */
+body::before {
+  content: ""; position: fixed; inset: -20%; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(380px 380px at 22% 18%, rgba(74, 163, 199, .40), transparent 60%),
+    radial-gradient(420px 420px at 82% 30%, rgba(126, 92, 200, .34), transparent 62%),
+    radial-gradient(460px 460px at 60% 88%, rgba(60, 150, 120, .30), transparent 60%);
+  filter: blur(30px);
+  animation: drift 22s ease-in-out infinite alternate;
+}
+@keyframes drift {
+  0%   { transform: translate(0, 0) scale(1); }
+  100% { transform: translate(-3%, 3%) scale(1.08); }
+}
+
+/* ---------- 手机壳（玻璃）---------- */
+.phone {
+  position: relative; z-index: 1;
+  width: 400px; max-width: 100vw; height: 100vh; max-height: 860px;
+  display: flex; flex-direction: column; overflow: hidden;
+  margin: auto; border-radius: 26px;
+  background: var(--glass);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-edge);
+  box-shadow: var(--shadow), inset 0 1px 0 var(--glass-hi);
+}
+.loading { align-items: center; justify-content: center; color: var(--text-dim); }
+
+/* 通用玻璃层：顶部一条高光 = 伪边缘镜面反射 */
+.glass, header, nav, .row, .room-head, .composer, .moment, .catchup, .frozen-note, .dev-panel {
+  background: var(--glass);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-edge);
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+}
+
+header {
+  padding: 14px 16px; color: var(--text);
+  display: flex; justify-content: space-between; align-items: center; flex: 0 0 auto;
+  border-radius: 0; border-left: 0; border-right: 0; border-top: 0;
+  font-weight: 600;
+}
+.head-actions { display: flex; align-items: center; gap: 8px; }
+.icon-btn {
+  border: 1px solid var(--glass-edge); background: var(--glass-2);
+  color: var(--text); border-radius: 12px; padding: 3px 8px; cursor: pointer;
+  font-size: 14px; line-height: 1.4;
+}
+.icon-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.freeze { border: 1px solid var(--glass-edge); background: var(--glass-2); color: var(--text); border-radius: 14px; padding: 3px 10px; cursor: pointer; }
+.freeze.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.catchup { padding: 10px 16px; font-size: 13px; color: var(--text); cursor: pointer; border-left: 0; border-right: 0; }
+.frozen-note { padding: 8px 16px; font-size: 12px; color: var(--accent-strong); border-left: 0; border-right: 0; }
+
+main { flex: 1; overflow-y: auto; position: relative; }
+nav { flex: 0 0 auto; display: flex; border-left: 0; border-right: 0; border-bottom: 0; }
+nav button { flex: 1; padding: 13px; border: 0; background: none; font-size: 15px; color: var(--text-dim); cursor: pointer; }
+nav button.active { color: var(--accent-strong); font-weight: 600; }
+
+/* ---------- AI 引擎面板 ---------- */
+.dev-panel { margin: 10px; border-radius: 16px; padding: 12px; }
+.dev-title { display: flex; justify-content: space-between; align-items: center; font-weight: 600; margin-bottom: 10px; }
+.dev-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.engine {
+  position: relative; text-align: left; cursor: pointer;
+  border: 1px solid var(--glass-edge); background: var(--glass-2); color: var(--text);
+  border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px;
+}
+.engine b { font-size: 14px; }
+.engine small { color: var(--text-dim); font-size: 11px; }
+.engine.on { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(74,163,199,.4), inset 0 1px 0 var(--glass-hi); }
+.engine.nokey { opacity: .5; cursor: not-allowed; }
+.engine .dot { position: absolute; top: 10px; right: 10px; width: 8px; height: 8px; border-radius: 50%; background: #4caf7d; }
+.engine.nokey .dot { background: #6b7686; }
+.dev-hint { margin-top: 10px; font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+.dev-error { margin-top: 8px; font-size: 11px; color: #ff9b8a; line-height: 1.5; background: rgba(229,83,61,.12); border: 1px solid rgba(229,83,61,.3); border-radius: 8px; padding: 8px 10px; }
+
+/* ---------- 人设编辑 ---------- */
+.persona-panel { margin: 10px; border-radius: 16px; padding: 12px; background: var(--glass); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); border: 1px solid var(--glass-edge); box-shadow: inset 0 1px 0 var(--glass-hi); flex: 0 0 auto; }
+.persona-panel textarea {
+  width: 100%; resize: vertical; border: 1px solid var(--glass-edge); border-radius: 10px;
+  background: var(--glass-2); color: var(--text); padding: 10px 12px; font-size: 13px; line-height: 1.6;
+  font-family: inherit; outline: none;
+}
+.persona-panel textarea::placeholder { color: var(--text-dim); }
+.persona-actions { display: flex; justify-content: space-between; margin-top: 8px; }
+.save-btn { border: 0; background: var(--accent); color: #fff; border-radius: 12px; padding: 5px 16px; cursor: pointer; }
+.icon-btn.danger { color: #ff9b8a; border-color: rgba(229,83,61,.4); }
+
+/* ---------- 捏人/导入 表单 ---------- */
+.persona-panel input[type="text"], .persona-panel input:not([type]) {
+  width: 100%; border: 1px solid var(--glass-edge); border-radius: 10px;
+  background: var(--glass-2); color: var(--text); padding: 8px 12px; font-size: 13px; outline: none; margin-bottom: 8px;
+}
+.persona-panel textarea { margin-bottom: 8px; }
+.form-grid { display: flex; gap: 8px; }
+.form-grid input { flex: 1; }
+.form-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13px; color: var(--text); margin: 4px 0; }
+.form-row input[type="range"] { vertical-align: middle; margin-left: 6px; }
+.list-actions { display: flex; gap: 8px; padding: 10px 12px 4px; }
+
+/* ---------- 捏人（参数化，非贴图）---------- */
+.maker { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; }
+.maker-preview { flex: 0 0 auto; padding: 6px 10px; border-radius: 14px; background: var(--glass-2); border: 1px solid var(--glass-edge); }
+.maker-ctrl { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.maker-row { display: flex; gap: 6px; }
+.maker-row.swatches { flex-wrap: wrap; }
+.maker-row .icon-btn { flex: 1; font-size: 11px; padding: 4px 2px; }
+.swatches label { flex: 1; display: flex; align-items: center; gap: 3px; font-size: 10px; color: var(--text-dim); }
+.swatches input[type="color"] { width: 22px; height: 22px; padding: 0; border: 1px solid var(--glass-edge); border-radius: 6px; background: none; cursor: pointer; }
+.swatches label.hgt { flex: 1 0 100%; }
+.swatches input[type="range"] { flex: 1; min-width: 0; }
+.islander-avatar svg, .card-avatar svg, .avatar svg { filter: drop-shadow(0 3px 4px rgba(0,0,0,.45)); }
+.stage-chip { font-style: normal; font-size: 10px; color: var(--accent-strong); border: 1px solid var(--glass-edge); border-radius: 8px; padding: 0 6px; margin-left: 4px; vertical-align: middle; font-weight: 400; }
+
+/* ---------- 岛屿视图 ---------- */
+.island { display: flex; flex-direction: column; height: 100%; overflow: hidden; position: relative; }
+.island-sea { position: absolute; inset: 0; background: radial-gradient(120% 100% at 50% 110%, rgba(40,90,130,.55), rgba(10,25,45,.65)); }
+.island-land {
+  position: relative; flex: 1; margin: 18px 14px 4px;
+  border-radius: 45% 55% 50% 50% / 50% 45% 55% 50%;
+}
+.poi { position: absolute; transform: translate(-50%,-50%); font-size: 9px; color: rgba(230,240,250,.4); letter-spacing: 1px; pointer-events: none; }
+.ground-layer { position: absolute; inset: 0; border-radius: inherit; }
+.bld { position: absolute; transform: translate(-62%,-118%); pointer-events: none; z-index: 1; overflow: visible; filter: drop-shadow(0 4px 6px rgba(0,0,0,.45)); }
+.rel-lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+.chronicle { margin: 0 14px 4px; padding: 8px 12px; border-radius: 12px; background: var(--glass); border: 1px solid var(--glass-edge); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); max-height: 120px; overflow-y: auto; }
+.chronicle-title { font-size: 10px; color: var(--text-dim); margin-bottom: 4px; letter-spacing: 1px; }
+.chronicle-line { font-size: 12px; color: var(--text); line-height: 1.6; opacity: .9; }
+.dream-overlay { position: absolute; inset: 0; z-index: 60; background: rgba(8,10,22,.9); display: flex; align-items: center; justify-content: center; padding: 24px; cursor: pointer; animation: crackFade 1s ease both; }
+.dream-card { text-align: center; max-width: 90%; }
+.dream-who { font-size: 12px; color: #8fa8d8; letter-spacing: 2px; margin-bottom: 14px; }
+.dream-text { font-size: 16px; color: #dfe6ee; line-height: 2; text-shadow: 0 0 20px rgba(120,150,220,.35); font-style: italic; }
+.islander {
+  position: absolute; transform: translate(-50%,-90%); display: flex; flex-direction: column; align-items: center;
+  cursor: pointer; transition: left 6s ease-in-out, top 6s ease-in-out; z-index: 2; max-width: 110px;
+}
+.islander-avatar { font-size: 26px; filter: drop-shadow(0 3px 4px rgba(0,0,0,.5)); animation: bob 2.6s ease-in-out infinite; }
+.islander.zz .islander-avatar { animation: none; opacity: .55; }
+@keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+.islander-name { font-size: 11px; color: var(--text); font-weight: 600; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+.islander-doing { font-size: 9px; color: var(--text-dim); text-align: center; line-height: 1.3; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+
+/* ---------- 相遇小剧场（朋友收集式：你在屏幕外看戏）---------- */
+.island.theater .island-land { filter: saturate(1.15) brightness(.75); }
+.island.theater .poi, .island.theater .rel-lines { opacity: .15; }
+.islander.dim { opacity: .18; filter: grayscale(.7); }
+.islander.onstage { transition: left .9s ease, top .9s ease; z-index: 4; }
+.islander.onstage .islander-avatar { font-size: 40px; }
+.islander.speaking .islander-avatar { animation: speakBob .5s ease-in-out infinite; filter: drop-shadow(0 0 12px rgba(255,240,200,.65)); }
+@keyframes speakBob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+.islander.speaking .islander-name { color: #ffe9b8; }
+
+.enc-prompt {
+  margin: 6px 12px; padding: 9px 12px; border-radius: 12px; cursor: pointer;
+  background: rgba(255,236,190,.14); border: 1px solid rgba(255,220,150,.35);
+  color: var(--text); font-size: 12px; text-align: center;
+  animation: bubPop 2.6s ease-in-out infinite;
+}
+.subtitle {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 20; cursor: pointer;
+  background: linear-gradient(to top, rgba(6,10,18,.96) 70%, rgba(6,10,18,0));
+  padding: 26px 20px 22px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
+}
+.sub-who { color: #ffd98a; font-size: 13px; flex: 0 0 auto; }
+.sub-line { color: #f2f6fb; font-size: 15px; line-height: 1.7; flex: 1 1 100%; }
+.sub-who + .sub-line { flex: 1 1 auto; }
+.sub-narr { color: #b9c6d6; font-size: 14px; line-height: 1.7; font-style: italic; flex: 1 1 100%; }
+.sub-next { position: absolute; right: 16px; bottom: 8px; font-style: normal; font-size: 10px; color: #6b7a8d; }
+.island-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 14px; }
+.archive { display: flex; flex-wrap: wrap; gap: 10px; padding: 6px 14px 2px; font-size: 10px; color: var(--text-dim); }
+.archive span { border: 1px solid var(--glass-edge); border-radius: 8px; padding: 2px 7px; background: var(--glass-2); }
+
+/* ---------- HUD ---------- */
+.hud { display: flex; align-items: center; gap: 6px; font-size: 15px; }
+.hud-chip { font-style: normal; font-size: 10px; font-weight: 400; color: var(--text-dim); border: 1px solid var(--glass-edge); background: var(--glass-2); border-radius: 8px; padding: 1px 6px; }
+
+/* ---------- 小人头顶气泡（朋友收集式 affordance）---------- */
+.bub {
+  position: absolute; top: -16px; right: -8px; font-size: 13px; line-height: 1;
+  padding: 3px 5px; border-radius: 10px 10px 10px 2px;
+  background: rgba(255,255,255,.92); box-shadow: 0 2px 6px rgba(0,0,0,.4);
+  animation: bubPop 2.2s ease-in-out infinite;
+}
+@keyframes bubPop { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-3px) scale(1.06); } }
+.bub.worry.lv3 { background: #ffd9d3; box-shadow: 0 0 12px rgba(229,83,61,.6); }
+.bub.worry.lv2 { background: #ffeec2; }
+.bub.unread { background: #cfe9ff; }
+.bub.sleep { background: rgba(200,215,235,.5); animation: none; }
+.bub.hungry { background: #e6f3d8; }
+
+/* ---------- 角色卡（底部抽屉）---------- */
+.sheet-mask { position: absolute; inset: 0; z-index: 50; background: rgba(4,8,16,.55); display: flex; align-items: flex-end; animation: crackFade .25s ease both; }
+.sheet {
+  width: 100%; max-height: 82%; overflow-y: auto; padding: 8px 16px 18px;
+  background: var(--glass); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  border-top: 1px solid var(--glass-edge); border-radius: 20px 20px 0 0;
+  box-shadow: 0 -10px 40px rgba(0,0,0,.5), inset 0 1px 0 var(--glass-hi);
+  animation: sheetUp .28s cubic-bezier(.2,.9,.3,1) both;
+}
+@keyframes sheetUp { from { transform: translateY(24px); opacity: .6; } to { transform: translateY(0); opacity: 1; } }
+.sheet-grab { width: 38px; height: 4px; border-radius: 2px; background: var(--glass-edge); margin: 2px auto 12px; }
+.card-top { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.card-avatar { font-size: 40px; }
+.card-id b { font-size: 17px; color: var(--text); display: block; }
+.card-id small { color: var(--text-dim); font-size: 12px; }
+.meter { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 11px; color: var(--text-dim); }
+.meter .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--glass-2); overflow: hidden; border: 1px solid var(--glass-edge); }
+.meter .bar i { display: block; height: 100%; background: linear-gradient(90deg, #4aa3c7, #6fc6e6); }
+.meter .bar i.warm { background: linear-gradient(90deg, #d98a5a, #e8b57a); }
+.meter b { color: var(--text); font-size: 11px; min-width: 26px; text-align: right; }
+.worry-box { margin: 10px 0; padding: 10px 12px; border-radius: 12px; background: var(--glass-2); border: 1px solid var(--glass-edge); }
+.worry-box.lv3 { border-color: rgba(229,83,61,.5); background: rgba(229,83,61,.12); }
+.worry-box.lv2 { border-color: rgba(217,169,74,.45); }
+.worry-box b { font-size: 12px; color: var(--text); }
+.worry-box p { font-size: 13px; color: var(--text); line-height: 1.6; margin: 4px 0; }
+.worry-box small { font-size: 10px; color: var(--text-dim); }
+.card-rels { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.rel-chip { font-size: 10px; color: var(--text-dim); border: 1px solid var(--glass-edge); border-radius: 8px; padding: 2px 7px; }
+.card-impression { font-size: 11px; color: var(--text-dim); line-height: 1.6; margin: 8px 0; padding: 8px 10px; background: var(--glass-2); border-radius: 10px; }
+.card-actions { display: flex; gap: 8px; margin-top: 12px; }
+.act { flex: 1; border: 1px solid var(--glass-edge); background: var(--glass-2); color: var(--text); border-radius: 12px; padding: 10px 6px; font-size: 12px; cursor: pointer; }
+.act:disabled { opacity: .45; cursor: default; }
+.act:not(:disabled):hover { border-color: var(--accent); }
+.dream-inline { margin-top: 12px; padding: 12px; border-radius: 12px; background: rgba(8,10,22,.6); color: #cfd8ea; font-style: italic; font-size: 13px; line-height: 1.9; text-align: center; }
+
+/* ---------- 投喂托盘 ---------- */
+.food-tray {
+  display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; flex: 0 0 auto;
+  background: var(--glass); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  border-bottom: 1px solid var(--glass-edge);
+}
+.food {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  border: 1px solid var(--glass-edge); background: var(--glass-2); color: var(--text);
+  border-radius: 12px; padding: 7px 10px; cursor: pointer; min-width: 56px;
+}
+.food span { font-size: 20px; }
+.food small { font-size: 10px; color: var(--text-dim); }
+.food:hover { border-color: var(--accent); }
+
+/* ---------- 正在输入 ---------- */
+.typing-note { margin-left: auto; color: var(--accent-strong); }
+.room-head .typing-note + .icon-btn, .room-head small + .icon-btn { margin-left: 8px; }
+.dots { display: inline-flex; gap: 4px; align-items: center; }
+.dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim); animation: dotPulse 1.2s ease-in-out infinite; }
+.dots i:nth-child(2) { animation-delay: .2s; }
+.dots i:nth-child(3) { animation-delay: .4s; }
+@keyframes dotPulse { 0%, 60%, 100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+
+/* ---------- 托底标记：脚本消息必须可见，不许再骗人 ---------- */
+.script-tag { display: inline-block; margin-left: 6px; font-style: normal; font-size: 10px; color: #d9a94a; border: 1px solid rgba(217,169,74,.5); border-radius: 6px; padding: 0 4px; vertical-align: middle; opacity: .85; }
+
+/* ---------- 聊天列表 ---------- */
+.row { display: flex; align-items: center; gap: 12px; padding: 14px 16px; cursor: pointer; border-left: 0; border-right: 0; border-top: 0; }
+.avatar { font-size: 26px; }
+.row-mid { flex: 1; min-width: 0; }
+.row-mid b { color: var(--text); }
+.row-mid small { display: block; color: var(--text-dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.badge { background: #e5533d; color: #fff; border-radius: 10px; font-size: 11px; padding: 1px 7px; }
+
+/* ---------- 聊天室 ---------- */
+.chatroom { display: flex; flex-direction: column; height: 100%; }
+.room-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; flex: 0 0 auto; border-left: 0; border-right: 0; border-top: 0; }
+.room-head b { color: var(--text); white-space: nowrap; }
+.room-head small { white-space: nowrap; }
+.tool-row { display: flex; gap: 6px; padding: 6px 12px; flex: 0 0 auto; background: var(--glass); border-bottom: 1px solid var(--glass-edge); }
+.tool-row .icon-btn { flex: 1; font-size: 11px; }
+.room-head button { border: 0; background: none; font-size: 24px; cursor: pointer; color: var(--accent-strong); }
+.room-head .icon-btn { font-size: 12px; border: 1px solid var(--glass-edge); background: var(--glass-2); color: var(--text); }
+.room-head small { margin-left: auto; color: var(--text-dim); }
+.bubbles { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.bubble-wrap { display: flex; flex-direction: column; }
+.time-divider { align-self: center; font-size: 11px; color: var(--text-dim); padding: 2px 10px; border-radius: 10px; background: var(--glass-2); }
+.read-receipt { align-self: flex-end; font-size: 10px; color: var(--text-dim); margin-top: 2px; padding-right: 4px; }
+.msg-meta { align-self: flex-start; font-size: 10px; color: var(--text-dim); margin-top: 2px; padding: 0 4px; opacity: .8; }
+.msg-meta.mine { align-self: flex-end; }
+.activity-chip { font-style: normal; font-size: 10px; color: var(--text-dim); margin-left: 6px; font-weight: 400; }
+.bubble { max-width: 75%; padding: 9px 13px; border-radius: 16px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; box-shadow: inset 0 1px 0 var(--glass-hi); }
+.bubble.mine { align-self: flex-end; background: var(--mine); color: var(--mine-text); border-bottom-right-radius: 4px; }
+.bubble.theirs { align-self: flex-start; background: var(--glass-2); color: var(--text); border: 1px solid var(--glass-edge); border-bottom-left-radius: 4px; backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); }
+.bubble.typing { color: var(--text-dim); letter-spacing: 3px; }
+.bubble.sel { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 裂缝时刻全屏演出：黑屏沉默→逐字浮现。恐慌先于温暖 */
+.chatroom { position: relative; }
+.crack-overlay {
+  position: absolute; inset: 0; z-index: 60;
+  background: rgba(4, 5, 8, .96);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 28px; cursor: pointer;
+  animation: crackFade 1.4s ease both;
+}
+@keyframes crackFade { from { opacity: 0; } to { opacity: 1; } }
+.crack-text {
+  color: #dfe6ee; font-size: 16px; line-height: 2; text-align: center;
+  letter-spacing: .06em; max-width: 92%; white-space: pre-wrap;
+  text-shadow: 0 0 18px rgba(120, 160, 200, .25);
+}
+.caret { display: inline-block; width: 1px; height: 1em; background: #dfe6ee; margin-left: 2px; vertical-align: -2px; animation: caretBlink 1s steps(1) infinite; }
+@keyframes caretBlink { 50% { opacity: 0; } }
+.crack-hint { margin-top: 30px; font-size: 11px; color: #5d6b7d; animation: crackFade 1.2s ease both; }
+
+.moment-time { color: var(--text-dim); font-size: 11px; }
+
+/* 裂缝时刻：不走普通气泡，永远暗底居中（明暗主题都一样）——恐慌先于温暖 */
+.bubble.crack {
+  align-self: center; max-width: 90%;
+  background: #0b0d12; color: #dfe6ee; text-align: center;
+  border: 1px solid rgba(120,140,170,.25); border-radius: 6px; padding: 18px 18px; font-size: 14px;
+  box-shadow: 0 0 34px rgba(0,0,0,.7);
+  animation: crackIn 2.4s ease both;
+}
+@keyframes crackIn { 0% { opacity: 0; } 45% { opacity: 0; } 100% { opacity: 1; } }
+
+/* ---------- 输入区 ---------- */
+.composer { display: flex; gap: 8px; padding: 10px 12px; flex: 0 0 auto; border-left: 0; border-right: 0; border-bottom: 0; }
+.composer input {
+  flex: 1; border: 1px solid var(--glass-edge); border-radius: 18px; padding: 8px 14px; font-size: 14px; outline: none;
+  background: var(--glass-2); color: var(--text);
+}
+.composer input::placeholder { color: var(--text-dim); }
+.composer button { border: 0; background: var(--accent); color: #fff; border-radius: 18px; padding: 8px 16px; cursor: pointer; }
+.composer button:disabled { opacity: .5; }
+
+/* ---------- 朋友圈 ---------- */
+.feed .composer { border-bottom: 1px solid var(--glass-edge); border-top: 0; }
+.moment { margin: 8px 10px; border-radius: 14px; padding: 12px 14px; }
+.moment-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.moment-head b { color: var(--text); }
+.moment-head .poke { margin-left: auto; border: 0; background: none; cursor: pointer; font-size: 15px; }
+.moment p { font-size: 14px; line-height: 1.6; color: var(--text); }
+.comment { margin-top: 8px; background: var(--glass-2); border-radius: 8px; padding: 6px 10px; font-size: 13px; color: var(--text-dim); }
+.comment b { color: var(--text); }

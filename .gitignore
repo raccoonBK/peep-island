@@ -1,0 +1,29 @@
+# === 密钥：绝对不能进仓库 ===
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# === 依赖 ===
+node_modules/
+
+# === 构建产物 ===
+client/dist/
+dist/
+build/
+
+# === 本地数据库（含玩家聊天记录，不上传）===
+*.db
+*.db-shm
+*.db-wal
+server/backups/
+
+# === 系统 / 编辑器 ===
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.log
+npm-debug.log*
