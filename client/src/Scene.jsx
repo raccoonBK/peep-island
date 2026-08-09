@@ -1,19 +1,78 @@
-import React from 'react';
+import React, { useState } from 'react';
 
-// 岛屿场景渲染：建筑和材质都是数据驱动的，不是背景图。
-// 换成你的 3D 岛/美术时，只替换这里的形状函数；scene JSON 结构不变。
+// ================= 岛屿场景：地块渲染 =================
+// 为什么是地块而不是一张整岛图：
+//   整岛图 = 1 张图 1 座岛，改一个建筑要重画整张，而建筑本来是 /api/scene 里的数据。
+//   地块 = 十几张图拼无限座岛，加一种地形等于加一张图，岛变大不用重画。
+//   这是加法和乘法的区别。
+//
+// 美术接入方式：把 32×32 的 PNG 丢进 client/public/tiles/，文件名对上 TILE_ART 即可。
+//   没有图片时自动回落到程序色块（background-color 垫底，background-image 404 不影响），
+//   所以这套东西在零美术资源的情况下就能跑，图片到位后不用改一行代码。
+const GRID = { cols: 11, rows: 14 };
+
+// 地形图。一个字符一格，改岛就是改这张表——不用碰代码。
+//   ~ 深水   . 沙滩   g 草地   p 土路   s 石板
+const TERRAIN = [
+  '~~~~~~~~~~~',
+  '~~~.ggg.~~~',
+  '~~.gggggg.~',
+  '~.ggggggg.~',
+  '~.ggggggg.~',
+  '~.gggggggg~',
+  '~.gggppggg~',
+  '.ggggpgggg~',
+  '.gggggggg.~',
+  '~.ggggggg.~',
+  '~..ggggg..~',
+  '~~..ggg..~~',
+  '~~~...~~~~~',
+  '~~~~~~~~~~~',
+];
+
+// 地块的程序色（没有美术资源时的样子）与对应图片名
+const TILE_ART = {
+  '~': { fill: '#3f6b86', art: 'water_deep' },
+  '.': { fill: '#d9c393', art: 'sand' },
+  'g': { fill: '#7ca86c', art: 'grass' },      // 有 grass_1/2/3 三个变体时随位置轮换
+  'p': { fill: '#b39a72', art: 'path_dirt' },
+  's': { fill: '#9aa0a6', art: 'stone' },
+};
+
+// —— 地点名 → 格子。日程表里的 loc 必须保持是"渔市""天台"这样的名字，
+//    因为 prompt 里得能说"她在渔市"，不能说"她在 (6,8)"。格子只是它的坐标投影。
+export const CELLS = {
+  码头: [8, 10], 海滩: [3, 11], 渔市: [6, 8], 西崖: [1, 7],
+  小北家: [2, 4], 阿澈家: [7, 3], 天台: [8, 2], 圆子家: [5, 4],
+  圆子院: [4, 5], 广场: [5, 7], 灯塔: [9, 5], 家: [5, 3],
+};
+
+// 格子 → 百分比（格心）。角色走位、建筑摆放、相遇判定共用这一套坐标。
+export const cellPct = ([c, r]) => [
+  ((c + 0.5) / GRID.cols) * 100,
+  ((r + 0.5) / GRID.rows) * 100,
+];
+export const LOCS = Object.fromEntries(
+  Object.entries(CELLS).map(([name, cell]) => [name, cellPct(cell)]),
+);
+// 两个地点是否相邻（含对角）。相遇判定从"同一个地点字符串"升级成"挨着"，
+// 触发更自然也更频繁——这是格子化最直接的玩法收益。
+export const adjacent = (a, b) => {
+  const A = CELLS[a], B = CELLS[b];
+  if (!A || !B) return false;
+  return Math.abs(A[0] - B[0]) <= 1 && Math.abs(A[1] - B[1]) <= 1;
+};
+
+// 建筑占地（格）。占多格之后建筑才不像贴纸。
+const FOOTPRINT = { house: [2, 2], shop: [2, 2], lighthouse: [1, 3], dock: [2, 1] };
+
 const MATERIALS = {
   wood: { roof: '#8a5a3b', wall: '#c9a26b', edge: '#6b4326' },
   stone: { roof: '#6d7686', wall: '#aeb6c2', edge: '#4c545f' },
   brick: { roof: '#8d4a3e', wall: '#c9705c', edge: '#5f2f27' },
 };
-const GROUNDS = {
-  grass: ['rgba(112,158,104,.62)', 'rgba(78,120,88,.5)'],
-  sand: ['rgba(214,190,140,.62)', 'rgba(180,155,110,.5)'],
-  snow: ['rgba(224,232,240,.66)', 'rgba(176,192,210,.5)'],
-};
 
-function House({ x, y, m, color }) {
+function House({ m, color }) {
   const mat = MATERIALS[m] || MATERIALS.wood;
   return (
     <g>
@@ -25,7 +84,7 @@ function House({ x, y, m, color }) {
     </g>
   );
 }
-function Lighthouse({ x, y, m, color }) {
+function Lighthouse({ m, color }) {
   const mat = MATERIALS[m] || MATERIALS.stone;
   return (
     <g>
@@ -37,7 +96,7 @@ function Lighthouse({ x, y, m, color }) {
     </g>
   );
 }
-function Shop({ x, y, m, color }) {
+function Shop({ m, color }) {
   const mat = MATERIALS[m] || MATERIALS.wood;
   return (
     <g>
@@ -48,7 +107,7 @@ function Shop({ x, y, m, color }) {
     </g>
   );
 }
-function Dock({ x, y, m }) {
+function Dock({ m }) {
   const mat = MATERIALS[m] || MATERIALS.wood;
   return (
     <g>
@@ -59,28 +118,58 @@ function Dock({ x, y, m }) {
     </g>
   );
 }
+const SHAPES = { house: House, shop: Shop, lighthouse: Lighthouse, dock: Dock };
 
-export default function Scene({ scene, locs }) {
+// 建筑：优先用 /buildings/<type>.png（灰度白模，运行时染色）；
+// 图片不存在时静默回落到上面的矢量形状。美术到位前后都能跑。
+function Building({ b, cell }) {
+  const [noArt, setNoArt] = useState(false);
+  const [fw, fh] = FOOTPRINT[b.type] || [2, 2];
+  const [x, y] = cellPct(cell);
+  const w = (fw / GRID.cols) * 100, h = (fh / GRID.rows) * 100;
+  const style = { left: `${x}%`, top: `${y}%`, width: `${w}%`, height: `${h}%` };
+  if (!noArt) {
+    return (
+      <img className="bld bld-art" style={{ ...style, ...(b.color ? { '--tint': b.color } : {}) }}
+        src={`/buildings/${b.type}.png`} alt="" onError={() => setNoArt(true)} />
+    );
+  }
+  const P = SHAPES[b.type] || House;
+  return (
+    <svg className="bld" style={style} viewBox="-40 -60 80 90" preserveAspectRatio="xMidYMax meet">
+      <P m={b.material} color={b.color} />
+    </svg>
+  );
+}
+
+// 单个地块。background-color 垫底 + background-image 覆盖：
+// 图片 404 时浏览器保留底色，所以"有图用图、没图用色"不需要任何判断逻辑。
+function Tile({ ch, c, r }) {
+  const t = TILE_ART[ch] || TILE_ART.g;
+  // 草地有三个变体时按位置轮换，打散重复感（AI 生图做不出无缝，靠变体掩盖）
+  const name = t.art === 'grass' ? `grass_${((c * 7 + r * 3) % 3) + 1}` : t.art;
+  return (
+    <i className="tile" style={{
+      backgroundColor: t.fill,
+      backgroundImage: `url(/tiles/${name}.png)`,
+    }} />
+  );
+}
+
+export default function Scene({ scene }) {
   if (!scene) return null;
-  const g = GROUNDS[scene.ground] || GROUNDS.grass;
-  const SZ = { house: 46, shop: 50, lighthouse: 40, dock: 48 };
   return (
     <>
-      <div className="ground-layer" style={{
-        background: `radial-gradient(75% 70% at 50% 48%, ${g[0]} 0%, ${g[1]} 55%, rgba(60,90,110,.15) 72%, transparent 78%)`,
-      }} />
+      <div className="tile-grid" style={{
+        gridTemplateColumns: `repeat(${GRID.cols}, 1fr)`,
+        gridTemplateRows: `repeat(${GRID.rows}, 1fr)`,
+      }}>
+        {TERRAIN.flatMap((row, r) =>
+          [...row].map((ch, c) => <Tile key={`${c},${r}`} ch={ch} c={c} r={r} />))}
+      </div>
       {(scene.buildings || []).map(b => {
-        const p = locs[b.loc];
-        if (!p) return null;
-        const P = b.type === 'lighthouse' ? Lighthouse : b.type === 'shop' ? Shop : b.type === 'dock' ? Dock : House;
-        const w = SZ[b.type] || 46;
-        return (
-          <svg key={b.id} className="bld" width={w} height={w}
-            viewBox="-40 -60 80 90"
-            style={{ left: `${p[0]}%`, top: `${p[1]}%` }}>
-            <P x={0} y={0} m={b.material} color={b.color} />
-          </svg>
-        );
+        const cell = CELLS[b.loc];
+        return cell ? <Building key={b.id} b={b} cell={cell} /> : null;
       })}
     </>
   );

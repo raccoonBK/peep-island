@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Avatar, { LOOK_DEFAULT, HAIR_STYLES, EYE_STYLES, MOUTH_STYLES, OUTFIT_STYLES } from './Avatar.jsx';
-import Scene from './Scene.jsx';
+import Scene, { LOCS, adjacent } from './Scene.jsx';
 
 const api = async (path, body, method = 'POST') => {
   const r = await fetch(path, body && {
@@ -545,11 +545,8 @@ function EinkFilters() {
 // ---------- 岛屿视图：观察者模式的雏形（AC/星露谷式日程驱动 + CSS 走位）----------
 // 位置来自 server 的日程表 loc；小时切换时小人走向新地点（CSS transition 就是"走路"）；
 // 原地每 7 秒轻微游荡一下。没有 tilemap、没有寻路——T3 换 PixiJS 壳时这里只换渲染层。
-const LOCS = {
-  码头: [76, 78], 海滩: [30, 84], 渔市: [62, 62], 西崖: [10, 55], 小北家: [22, 34],
-  阿澈家: [72, 22], 天台: [80, 12], 圆子家: [45, 30], 圆子院: [38, 42], 广场: [50, 55],
-  灯塔: [90, 40], 家: [50, 25],
-};
+// 坐标已统一到 Scene.jsx 的格子系统：LOCS 由 CELLS 推导出来（格心的百分比）。
+// 走位、建筑、相遇判定共用同一套网格；adjacent() 让"挨着"也能算相遇。
 const homeOf = (id) => id === 'xiaobei' ? '小北家' : id === 'ache' ? '阿澈家' : id === 'yuanzi' ? '圆子家' : '广场';
 const basePos = (c) => LOCS[c.loc === '家' ? homeOf(c.id) : c.loc] || LOCS['广场'];
 
@@ -610,7 +607,7 @@ function Island({ chars, island, onPick }) {
     <main className={'island' + (playing ? ' theater' : '')}>
       <div className="island-sea" />
       <div className="island-land">
-        <Scene scene={scene} locs={LOCS} />
+        <Scene scene={scene} />
         <svg className="rel-lines" viewBox="0 0 100 100" preserveAspectRatio="none">
           {rels.filter(r => r.value >= 40 && byId[r.a] && byId[r.b]).map(r => {
             const p1 = basePos(byId[r.a]), p2 = basePos(byId[r.b]);

@@ -172,7 +172,25 @@ nav button.active { color: var(--accent-strong); font-weight: 600; }
 }
 .poi { position: absolute; transform: translate(-50%,-50%); font-size: 9px; color: rgba(230,240,250,.4); letter-spacing: 1px; pointer-events: none; }
 .ground-layer { position: absolute; inset: 0; border-radius: inherit; }
-.bld { position: absolute; transform: translate(-62%,-118%); pointer-events: none; z-index: 1; overflow: visible; filter: drop-shadow(0 4px 6px rgba(0,0,0,.45)); }
+
+/* ---------- 地块网格 ----------
+   每格一个 <i>：background-color 垫底，background-image 覆盖。
+   图片 404 时浏览器保留底色，所以"有图用图、没图用色"不需要任何判断逻辑，
+   美术资源到位前后代码完全一样。 */
+.tile-grid { position: absolute; inset: 0; display: grid; border-radius: inherit; overflow: hidden; }
+.tile {
+  display: block; width: 100%; height: 100%;
+  background-size: 100% 100%; background-repeat: no-repeat;
+  image-rendering: pixelated;      /* 32px 的图放大到格子大小时保持硬边，不糊 */
+}
+/* 建筑按格子尺寸定位：宽高来自 FOOTPRINT（占几格就多宽），
+   锚点落在 loc 格心、底边略微上提，让它"坐"在地块上而不是浮着。 */
+.bld {
+  position: absolute; transform: translate(-50%, -62%);
+  pointer-events: none; z-index: 2; overflow: visible;
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, .45));
+}
+.bld-art { object-fit: contain; image-rendering: pixelated; }
 .rel-lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
 .chronicle { margin: 0 14px 4px; padding: 8px 12px; border-radius: 12px; background: var(--glass); border: 1px solid var(--glass-edge); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); max-height: 120px; overflow-y: auto; }
 .chronicle-title { font-size: 10px; color: var(--text-dim); margin-bottom: 4px; letter-spacing: 1px; }
@@ -385,13 +403,12 @@ nav button.active { color: var(--accent-strong); font-weight: 600; }
 /* 墨水屏上不存在"大面积中间调填充"——真实设备的界面是白底加黑线。
    所以海面/地面那几层深色渐变必须换成浅色，否则灰度化后是一整片噪点，字先死。
    这条是这次实现里最重要的发现：墨水屏不是加个滤镜，UI 本身要为它重做。 */
-.phone.eink .island-sea {
-  background: radial-gradient(120% 100% at 50% 110%, #f2f0ea, #e4e1d8) !important;
-}
-.phone.eink .ground-layer {
-  background: radial-gradient(75% 70% at 50% 48%, #fff 0%, #f4f2ec 52%, #dcd9d0 72%, transparent 78%) !important;
-}
+.phone.eink .island-sea { background: #eceae3 !important; }
+/* 地块在墨水屏下换成"白底黑线"：深水填网点、陆地留白、格线细描。
+   这正是真实墨水屏界面的语言，也正好是像素 tile 该被画成的样子。 */
+.phone.eink .tile { background-image: none !important; box-shadow: inset 0 0 0 .5px #b4b1a9; }
 .phone.eink .island-land { border: 1px solid #9a978f !important; }
+.phone.eink .bld { filter: none !important; }
 .phone.eink .islander-name,
 .phone.eink .islander-doing { color: #2b2a28 !important; }
 .phone.eink .islander-avatar svg,
