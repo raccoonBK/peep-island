@@ -332,6 +332,88 @@ nav button.active { color: var(--accent-strong); font-weight: 600; }
 .bubble.typing { color: var(--text-dim); letter-spacing: 3px; }
 .bubble.sel { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* ================= 墨水屏模式 =================
+   管线见 App.jsx 的 EinkFilters 注释。这里负责三件事：
+   1) .eink-dither —— 8×8 Bayer 有序抖动图层。必须是 .phone 的子元素：
+      子元素先按 mix-blend-mode 合成，父元素的 filter 才作用在合成结果上，
+      所以"先加阈值、后量化"的顺序是浏览器帮我们保证的。
+      有序抖动（而不是随机噪点）才有那种机械的交叉网点感——1-bit 设备的标志。
+   2) 接上 SVG 量化滤镜。
+   3) 关掉所有补间动画：电子墨水刷新一次要几十到几百毫秒，
+      物理上做不出平滑过渡。留着 CSS transition 就立刻露馅。 */
+.phone.eink {
+  filter: url(#eink-q4);
+  background: #d9d6cc;
+  /* 墨水屏只有"墨"和"纸"两个有效色阶。浅色主题里那些低对比的次要文字，
+     量化之后会直接并进纸色里消失，所以先把变量本身压黑再进管线。 */
+  --text: #16150f;
+  --text-dim: #4a4842;
+  --line: #8d8a82;
+}
+.phone.eink-2 { filter: url(#eink-q2); }
+.eink-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+.eink-dither {
+  position: absolute; inset: 0; z-index: 999; pointer-events: none;
+  /* 抖动只负责打散量化产生的色带，不是画面的纹理。
+     调大就会变成一片噪点——中间调正好落在抖动最活跃的区间，字会先死。 */
+  mix-blend-mode: soft-light; opacity: .18;
+  /* 8×8 Bayer 阈值矩阵，每格 1px，整体放大 2 倍 → 网点更粗，接近低分辨率小屏的观感 */
+  background-image: url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8' shape-rendering='crispEdges'>\
+<rect x='0' y='0' width='1' height='1' fill='%23000'/><rect x='4' y='0' width='1' height='1' fill='%23808080'/>\
+<rect x='1' y='0' width='1' height='1' fill='%23202020'/><rect x='5' y='0' width='1' height='1' fill='%23a0a0a0'/>\
+<rect x='2' y='0' width='1' height='1' fill='%23080808'/><rect x='6' y='0' width='1' height='1' fill='%23888888'/>\
+<rect x='3' y='0' width='1' height='1' fill='%23282828'/><rect x='7' y='0' width='1' height='1' fill='%23a8a8a8'/>\
+<rect x='0' y='1' width='1' height='1' fill='%23c0c0c0'/><rect x='4' y='1' width='1' height='1' fill='%23404040'/>\
+<rect x='1' y='1' width='1' height='1' fill='%23e0e0e0'/><rect x='5' y='1' width='1' height='1' fill='%23606060'/>\
+<rect x='2' y='1' width='1' height='1' fill='%23c8c8c8'/><rect x='6' y='1' width='1' height='1' fill='%23484848'/>\
+<rect x='3' y='1' width='1' height='1' fill='%23e8e8e8'/><rect x='7' y='1' width='1' height='1' fill='%23686868'/>\
+<rect x='0' y='2' width='1' height='1' fill='%23303030'/><rect x='4' y='2' width='1' height='1' fill='%23b0b0b0'/>\
+<rect x='1' y='2' width='1' height='1' fill='%23101010'/><rect x='5' y='2' width='1' height='1' fill='%23909090'/>\
+<rect x='2' y='2' width='1' height='1' fill='%23383838'/><rect x='6' y='2' width='1' height='1' fill='%23b8b8b8'/>\
+<rect x='3' y='2' width='1' height='1' fill='%23181818'/><rect x='7' y='2' width='1' height='1' fill='%23989898'/>\
+<rect x='0' y='3' width='1' height='1' fill='%23f0f0f0'/><rect x='4' y='3' width='1' height='1' fill='%23707070'/>\
+<rect x='1' y='3' width='1' height='1' fill='%23d0d0d0'/><rect x='5' y='3' width='1' height='1' fill='%23505050'/>\
+<rect x='2' y='3' width='1' height='1' fill='%23f8f8f8'/><rect x='6' y='3' width='1' height='1' fill='%23787878'/>\
+<rect x='3' y='3' width='1' height='1' fill='%23d8d8d8'/><rect x='7' y='3' width='1' height='1' fill='%23585858'/>\
+</svg>");
+  background-repeat: repeat;
+  background-size: 16px 16px;
+}
+
+/* 墨水屏上不存在"大面积中间调填充"——真实设备的界面是白底加黑线。
+   所以海面/地面那几层深色渐变必须换成浅色，否则灰度化后是一整片噪点，字先死。
+   这条是这次实现里最重要的发现：墨水屏不是加个滤镜，UI 本身要为它重做。 */
+.phone.eink .island-sea {
+  background: radial-gradient(120% 100% at 50% 110%, #f2f0ea, #e4e1d8) !important;
+}
+.phone.eink .ground-layer {
+  background: radial-gradient(75% 70% at 50% 48%, #fff 0%, #f4f2ec 52%, #dcd9d0 72%, transparent 78%) !important;
+}
+.phone.eink .island-land { border: 1px solid #9a978f !important; }
+.phone.eink .islander-name,
+.phone.eink .islander-doing { color: #2b2a28 !important; }
+.phone.eink .islander-avatar svg,
+.phone.eink .card-avatar svg,
+.phone.eink .avatar svg { filter: none !important; }
+.phone.eink .rel-lines { opacity: .35 !important; }
+
+/* 墨水屏做不出补间。所有过渡与动画一律砍掉，只留下"上一帧→下一帧"的硬切。 */
+.phone.eink *,
+.phone.eink *::before,
+.phone.eink *::after {
+  transition: none !important;
+  animation: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  border-radius: 2px !important;
+  backdrop-filter: none !important;
+}
+/* 唯一保留的动画：裂缝时刻的逐字浮现（它靠 JS 打字，不依赖 CSS 过渡） */
+.phone.eink .crack-overlay { animation: none !important; background: #2b2a28 !important; }
+.phone.eink .caret { animation: caretBlink 1.1s steps(1) infinite !important; }
+
 /* ---------- 裂缝时刻全屏演出 ----------
    演出原则：先夺走，再给。
    黑屏不是背景，是"整个界面消失了"——聊天记录、状态栏、手机壳全部没有了，

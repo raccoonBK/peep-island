@@ -19,11 +19,15 @@ export default function App() {
   const [catchup, setCatchup] = useState(null);
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
   const [dev, setDev] = useState(false);
+  // 墨水屏模式：0=关 2=1bit黑白 4=四阶灰。数字就是量化的灰阶数。
+  const [eink, setEink] = useState(() => Number(localStorage.getItem('eink') || 0));
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('theme', theme);
   }, [theme]);
+
+  useEffect(() => { localStorage.setItem('eink', String(eink)); }, [eink]);
 
   const refresh = () => api('/api/state').then(setState);
 
@@ -44,7 +48,9 @@ export default function App() {
   if (!state) return <div className="phone loading">上岛中…</div>;
 
   return (
-    <div className="phone">
+    <div className={'phone' + (eink ? ` eink eink-${eink}` : '')}>
+      {eink > 0 && <EinkFilters />}
+      {eink > 0 && <div className="eink-dither" aria-hidden />}
       <header>
         <span className="hud">
           🏝 <b>窥岛</b>
@@ -53,6 +59,14 @@ export default function App() {
           <i className="hud-chip">{happyFace(state.island?.happiness ?? 60)} {state.island?.happiness ?? 60}</i>
         </span>
         <div className="head-actions">
+          <button className={'icon-btn' + (eink ? ' on' : '')} title="墨水屏模式：关 → 四阶灰 → 纯黑白"
+            onClick={() => setEink(e => {
+              const next = e === 0 ? 4 : e === 4 ? 2 : 0;
+              if (next) setTheme('light');   // 墨水屏是反射式的纸，没有背光——暗色主题灰度化后是一块黑纸
+              return next;
+            })}>
+            {eink === 0 ? '🖥' : eink === 4 ? '📄' : '◧'}
+          </button>
           <button className="icon-btn" title="切换明暗"
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
             {theme === 'dark' ? '☀️' : '🌙'}
@@ -482,6 +496,49 @@ function ChatRoom({ charId, chars, onBack, frozen }) {
       </div>
       )}
     </main>
+  );
+}
+
+// ---------- 墨水屏后处理管线 ----------
+// 不是"画"出来的，是对已渲染画面的后处理，顺序严格：
+//   1) 去色            —— 墨水屏没有彩色子像素（Kaleido 那种彩色滤光片是另一回事）
+//   2) 提对比          —— 电子墨水的动态范围窄，中间调必须被推开
+//   3) 加抖动阈值      —— 由 DOM 里的 .eink-dither 图层以 mix-blend-mode 混入，
+//                         它是 .phone 的子元素，所以先合成、后进滤镜，顺序天然正确
+//   4) 量化到有限灰阶  —— feComponentTransfer type="discrete"，几个值就是几阶
+//   5) 映射到纸/墨颜色 —— 墨水屏的白不是 #fff（是偏暖的灰白），黑也不是 #000
+// 灰阶数由调用方给：4 = 四阶灰（Carta 观感），2 = 纯黑白（1-bit，最像早期设备）
+const EINK_PAPER = [0.851, 0.839, 0.800];   // #d9d6cc 反射式纸面
+const EINK_INK = [0.169, 0.165, 0.157];     // #2b2a28 电泳黑，永远到不了纯黑
+
+function EinkFilters() {
+  const mk = (id, levels) => (
+    <filter id={id} key={id} colorInterpolationFilters="sRGB">
+      <feColorMatrix type="saturate" values="0" />
+      <feComponentTransfer>
+        <feFuncR type="linear" slope="1.75" intercept="-0.38" />
+        <feFuncG type="linear" slope="1.75" intercept="-0.38" />
+        <feFuncB type="linear" slope="1.75" intercept="-0.38" />
+      </feComponentTransfer>
+      <feComponentTransfer>
+        <feFuncR type="discrete" tableValues={levels} />
+        <feFuncG type="discrete" tableValues={levels} />
+        <feFuncB type="discrete" tableValues={levels} />
+      </feComponentTransfer>
+      <feComponentTransfer>
+        <feFuncR type="linear" slope={EINK_PAPER[0] - EINK_INK[0]} intercept={EINK_INK[0]} />
+        <feFuncG type="linear" slope={EINK_PAPER[1] - EINK_INK[1]} intercept={EINK_INK[1]} />
+        <feFuncB type="linear" slope={EINK_PAPER[2] - EINK_INK[2]} intercept={EINK_INK[2]} />
+      </feComponentTransfer>
+    </filter>
+  );
+  return (
+    <svg className="eink-defs" width="0" height="0" aria-hidden>
+      <defs>
+        {mk('eink-q4', '0 0.34 0.67 1')}
+        {mk('eink-q2', '0 1')}
+      </defs>
+    </svg>
   );
 }
 
