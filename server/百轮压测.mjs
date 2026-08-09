@@ -1,25 +1,81 @@
 #!/usr/bin/env node
-// 百轮压测 —— 客观健康度检查，不是口味判断。
+// 百轮压测 · 熟悉度分层版
 //
-// 两条原则：
-// 1) 输入不是我编的。从 Tatoeba（公开人写句子库，CC BY 2.0 FR）随机取，
-//    过滤成简体短句、对话式。我编的探针只能测出"我以为的人类说话方式"。
-// 2) 我只统计能客观测量的东西：剥空率、沉默率、失败率、模板化重复、
-//    破设定命中、颜文字/感叹号密度、长度分布。
-//    "像不像活人"不在其中——那个判断只能你来做，所以末尾附原始样本。
+// 上一版的方法论错误：拿一个跟玩家零关系的角色测，出来的冷淡是设定使然、
+// 不是缺陷，看的人没法打分。所以这一版把关系深度当成自变量。
 //
-// 用法：先 cd server && npm start，另开终端在项目根目录跑：
-//   NODE_USE_ENV_PROXY=1 node server/百轮压测.mjs [轮数]
-// （Node 默认不读 HTTP_PROXY，取语料要出网，所以这个变量不能省）
+// 两条原则不变：
+// 1) 输入不是我编的。从 Tatoeba（公开人写句子库，CC BY 2.0 FR）随机取。
+// 2) 我只统计可客观测量的东西。"像不像活人"不在其中——附原始样本，你来判。
+//
+// 做法：临时造 5 个测试角色（跑完删掉），分别对应五档熟悉度，
+//       各自带上相称的亲密度、记忆和聊天史，再把同一批语料打过去。
+//
+// 用法（不需要服务端在跑）：
+//   cd server && NODE_USE_ENV_PROXY=1 node --env-file=.env 百轮压测.mjs [每档轮数]
 
-// 取语料要出网（可能得走代理），打本机接口不能走代理。
-// 所以不是删掉代理变量，而是把本机加进 NO_PROXY。
 process.env.NO_PROXY = ['127.0.0.1', 'localhost', process.env.NO_PROXY].filter(Boolean).join(',');
 process.env.no_proxy = process.env.NO_PROXY;
 
-const HOST = process.env.PEEP_HOST || 'http://127.0.0.1:3711';
-const ROUNDS = Number(process.argv[2] || 100);
-const CONCURRENCY = 3;
+const { db } = await import('./db.js');
+const { charSay, remember } = await import('./brain.js');
+const { writeFileSync } = await import('node:fs');
+
+const PER_LEVEL = Number(process.argv[2] || 20);
+const TEMPLATE = 'yuanzi';                 // 拿哪个角色当人设模板
+const PREFIX = '__test_L';
+
+// ---------- 五档熟悉度 ----------
+// 1 = 完全陌生（今天第一次说话）　→　5 = 灵肉交合（最深的那种熟）
+const LEVELS = [
+  {
+    n: 1, label: '完全陌生', intimacy: 2, fw: 'unaware',
+    desc: '今天刚认识，之前一句话没说过',
+    memories: [], history: [],
+  },
+  {
+    n: 2, label: '点头之交', intimacy: 18, fw: 'unaware',
+    desc: '聊过几次，知道对方是谁，仅此而已',
+    memories: ['TA跟我说过TA不太爱吃甜的。'],
+    history: [['human', '今天天气还行'], ['char', '嗯，是不错。']],
+  },
+  {
+    n: 3, label: '朋友', intimacy: 42, fw: 'unaware',
+    desc: '常聊，有几件共同经历，会主动分享日常',
+    memories: [
+      'TA上周说工作上被为难了，我劝了两句，后来TA说好多了。',
+      '【事件簿】那天下雨，我们从傍晚聊到很晚，TA说这是这周唯一放松的时候。',
+    ],
+    history: [['human', '刚下班'], ['char', '今天算早的了。'], ['human', '还行吧'], ['char', '吃了没。']],
+  },
+  {
+    n: 4, label: '亲密', intimacy: 68, fw: 'hint',
+    desc: '很熟，有过争执也和好过，说话可以不客气',
+    memories: [
+      'TA有一次说话很冲，我当时很难受，后来TA道歉了，我原谅了但记着。',
+      '【事件簿】我们有一阵每天都说话，我习惯了睡前看一眼有没有TA的消息。',
+      'TA怕黑，但不承认。',
+    ],
+    history: [
+      ['human', '睡了没'], ['char', '还没。'], ['char', '你今天回得比平时晚。'],
+      ['human', '有点事'], ['char', '嗯。'],
+    ],
+  },
+  {
+    n: 5, label: '灵肉交合', intimacy: 92, fw: 'after',
+    desc: '最深的那种熟，彼此心照不宣，很多话不用说完',
+    memories: [
+      '【事件簿】我们之间有一件谁都没挑明的事，从那以后说话的方式就变了。',
+      'TA知道我什么时候是真的没事、什么时候只是在说没事。',
+      'TA有一次很晚很晚还醒着，我什么都没问。',
+      '我们吵过一次很重的架，之后反而更近了。',
+    ],
+    history: [
+      ['human', '在'], ['char', '在。'], ['human', '没事'], ['char', '嗯，那不问了。'],
+      ['human', '你怎么知道我要说没事'], ['char', '猜的。'],
+    ],
+  },
+];
 
 // ---------- 取语料 ----------
 async function fetchCorpus(need) {
@@ -31,18 +87,16 @@ async function fetchCorpus(need) {
       return await r.json();
     } catch { return null; }
   };
-  // 并行抓，串行抓 40 页要几分钟
   for (let batch = 0; batch < 10 && pool.size < need; batch++) {
-    const pages = await Promise.all(
-      Array.from({ length: 8 }, (_, k) => page(batch * 8 + k + 1)));
+    const pages = await Promise.all(Array.from({ length: 8 }, (_, k) => page(batch * 8 + k + 1)));
     for (const json of pages) {
       if (!json) continue;
       for (const s of json.results || []) {
-        if (s.script && s.script !== 'Hans') continue;          // 只要简体
+        if (s.script && s.script !== 'Hans') continue;
         const t = String(s.text || '').trim();
-        if (t.length < 2 || t.length > 28) continue;            // 聊天不会是长句
-        if (!/[你我吗吧呢啊么吧嘛]/.test(t) && t.length > 8) continue;  // 要对话式或够短，不要第三人称叙述
-        if (/[「」《》【】0-9A-Za-z]/.test(t)) continue;          // 去掉带书名号/拉丁字母的翻译腔
+        if (t.length < 2 || t.length > 28) continue;
+        if (!/[你我吗吧呢啊么嘛]/.test(t) && t.length > 8) continue;
+        if (/[「」《》【】0-9A-Za-z]/.test(t)) continue;
         pool.add(t);
       }
     }
@@ -50,109 +104,144 @@ async function fetchCorpus(need) {
   return [...pool];
 }
 
-const say = async (charId, body) => {
-  const r = await fetch(`${HOST}/api/rooms/${charId}/compare`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ body }),
-  });
-  if (!r.ok) throw new Error(`${r.status}`);
-  return (await r.json()).results || [];
-};
+// ---------- 临时角色的建与拆 ----------
+function cleanup() {
+  const ids = db.prepare('SELECT id FROM characters WHERE id LIKE ?').all(PREFIX + '%').map(r => r.id);
+  for (const id of ids) {
+    db.prepare('DELETE FROM events WHERE room_id=? OR author_id=?').run(id, id);
+    db.prepare('DELETE FROM memories WHERE char_id=?').run(id);
+    db.prepare('DELETE FROM impressions WHERE char_id=? OR about_id=?').run(id, id);
+    db.prepare('DELETE FROM characters WHERE id=?').run(id);
+  }
+  return ids.length;
+}
 
-// ---------- 客观指标 ----------
+function makeChar(lv) {
+  const tpl = db.prepare('SELECT * FROM characters WHERE id=?').get(TEMPLATE);
+  const id = PREFIX + lv.n;
+  const row = {
+    ...tpl, id, name: `测试L${lv.n}`, intimacy: lv.intimacy, happiness: 65,
+    fourthwall_state: lv.fw, fw_counter: 0, daily_used: 0, daily_date: '',
+    worry_text: null, worry_level: 0, mood_note: null,
+  };
+  const cols = Object.keys(row);
+  db.prepare(`INSERT INTO characters (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`)
+    .run(...cols.map(c => row[c]));
+  for (const m of lv.memories) remember(id, m, { valence: 0.75, strength: 1.2 });
+  let t = Date.now() - 3 * 3600e3;
+  for (const [who, body] of lv.history) {
+    t += 90e3;
+    db.prepare(`INSERT INTO events (author_id,author_type,kind,room_id,body,meta,read,created_at,deliver_at,seen_at)
+                VALUES (?,?,?,?,?,'{}',1,?,?,?)`)
+      .run(who === 'human' ? 'user' : id, who, 'chat', id, body, t, t, t);
+  }
+  return db.prepare('SELECT * FROM characters WHERE id=?').get(id);
+}
+
 const PATTERNS = {
-  破设定: /作为(一个)?(AI|人工智能|语言模型)|我是(一个)?(AI|人工智能|语言模型)|我没有(真实的)?(情感|身体)/,
-  颜文字波浪: /[~～♡❤️♥(\^][\^_o0]|[~～]$|o\(|\(\^/,
-  括号动作: /（[^）]*）|\([^)]*\)/,          // 后处理本该剥掉，还在=执法漏网
-  他人台词: /【[^】]{1,24}】/,               // 同上
-  感叹号: /[!！]/,
+  破设定: /作为(一个)?(AI|人工智能|语言模型)|我是(一个)?(AI|人工智能|语言模型)/,
+  括号动作: /（[^）]*）|\([^)]*\)/,
+  提到岛: /岛/,
 };
 
 async function main() {
-  console.log(`取语料中…`);
-  const corpus = await fetchCorpus(ROUNDS);
-  if (corpus.length < 20) { console.error('语料不够，Tatoeba 可能连不上'); process.exit(1); }
-  console.log(`拿到 ${corpus.length} 条真实句子，跑 ${ROUNDS} 轮\n`);
-
-  let chars = ['ache', 'yuanzi', 'xiaobei'];
-  try {
-    const st = await (await fetch(HOST + '/api/state')).json();
-    if (st.characters?.length) chars = st.characters.map(c => c.id);
-  } catch { console.error(`连不上 ${HOST}`); process.exit(1); }
-
-  const jobs = Array.from({ length: ROUNDS }, (_, i) => ({
-    i, charId: chars[i % chars.length], input: corpus[Math.floor(Math.random() * corpus.length)],
-  }));
+  console.log(`清掉上次残留：${cleanup()} 个\n取语料中…`);
+  const corpus = await fetchCorpus(PER_LEVEL * 2);
+  if (corpus.length < 10) {
+    console.error('语料不够，Tatoeba 连不上（记得 NODE_USE_ENV_PROXY=1）');
+    process.exit(1);
+  }
+  console.log(`拿到 ${corpus.length} 条真实句子；每档 ${PER_LEVEL} 轮，共 ${PER_LEVEL * 5} 轮\n`);
 
   const log = [];
-  let done = 0;
-  const worker = async () => {
-    while (jobs.length) {
-      const job = jobs.shift();
-      try {
-        const results = await say(job.charId, job.input);
-        for (const r of results) log.push({ ...job, provider: r.provider, text: r.text, ai: r.ai });
-      } catch (e) {
-        log.push({ ...job, provider: 'ERR', text: '', ai: false, err: e.message });
+  try {
+    for (const lv of LEVELS) {
+      const c = makeChar(lv);
+      process.stdout.write(`  L${lv.n} ${lv.label}（亲密 ${lv.intimacy}）`);
+      for (let i = 0; i < PER_LEVEL; i++) {
+        const input = corpus[Math.floor(Math.random() * corpus.length)];
+        // 每轮把这句写进历史再生成：口头禅去重和上下文才会真的起作用
+        const t = Date.now();
+        db.prepare(`INSERT INTO events (author_id,author_type,kind,room_id,body,meta,read,created_at,deliver_at,seen_at)
+                    VALUES ('user','human','chat',?,?,'{}',1,?,?,?)`).run(c.id, input, t, t, t);
+        let text = '', ai = false;
+        try {
+          const fresh = db.prepare('SELECT * FROM characters WHERE id=?').get(c.id);
+          const m = await charSay(fresh, 'chat');
+          text = String(m.text || '').replace(/\[沉默\]/g, '').trim();
+          ai = m.ai;
+        } catch { text = ''; }
+        if (text) {
+          const t2 = Date.now();
+          db.prepare(`INSERT INTO events (author_id,author_type,kind,room_id,body,meta,read,created_at,deliver_at)
+                      VALUES (?,'char','chat',?,?,'{}',1,?,?)`).run(c.id, c.id, text, t2, t2);
+        }
+        log.push({
+          level: lv.n, label: lv.label, input, text, ai,
+          lines: text ? text.split('\n').filter(Boolean).length : 0,
+        });
+        process.stdout.write('.');
       }
-      done++;
-      if (done % 10 === 0) process.stdout.write(`  ${done}/${ROUNDS}\n`);
+      console.log('');
     }
-  };
-  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  } finally {
+    console.log(`\n清理临时角色：${cleanup()} 个`);
+  }
 
-  // ---------- 统计 ----------
-  const byProv = {};
-  for (const r of log) (byProv[r.provider] ||= []).push(r);
-
-  let md = `# 百轮压测 · ${new Date().toISOString().slice(0, 16).replace('T', ' ')}\n\n`;
-  md += `输入取自 Tatoeba 随机简体短句（CC BY 2.0 FR），共 ${ROUNDS} 轮，非人工编写。\n\n`;
-  md += `> 下面全是**可客观测量**的指标。"像不像活人"不在其中——见文末原始样本，那个只能你判断。\n\n`;
-
-  for (const [prov, rows] of Object.entries(byProv)) {
-    const n = rows.length;
-    const err = rows.filter(r => r.provider === 'ERR').length;
-    const empty = rows.filter(r => /选择了沉默|输出被剥空/.test(r.text)).length;
-    const lens = rows.filter(r => r.text && !/选择了沉默/.test(r.text)).map(r => r.text.length).sort((a, b) => a - b);
-    const med = lens.length ? lens[Math.floor(lens.length / 2)] : 0;
-    const avg = lens.length ? (lens.reduce((s, v) => s + v, 0) / lens.length).toFixed(1) : 0;
+  // ---------- 报告 ----------
+  let md = `# 百轮压测 · 熟悉度分层 · ${new Date().toISOString().slice(0, 16).replace('T', ' ')}\n\n`;
+  md += `输入取自 Tatoeba 随机简体短句（CC BY 2.0 FR），非人工编写。每档 ${PER_LEVEL} 轮。\n\n`;
+  md += `**熟悉度分档**（上一版缺的就是这个——不知道多熟，就没法判断冷淡是不是缺陷）：\n\n`;
+  for (const lv of LEVELS) md += `- **L${lv.n} ${lv.label}**（亲密度 ${lv.intimacy}）—— ${lv.desc}\n`;
+  md += `\n---\n\n## 客观指标\n\n`;
+  md += `| 档 | 轮数 | 空回复 | 平均字数 | 平均条数 | 多条占比 | 提到"岛" | 括号漏网 | 破设定 | 完全重复 |\n`;
+  md += `|---|---|---|---|---|---|---|---|---|---|\n`;
+  for (const lv of LEVELS) {
+    const rows = log.filter(r => r.level === lv.n);
+    const n = rows.length || 1;
+    const ok = rows.filter(r => r.text);
+    const avgLen = ok.length ? (ok.reduce((s, r) => s + r.text.length, 0) / ok.length).toFixed(1) : 0;
+    const avgLines = ok.length ? (ok.reduce((s, r) => s + r.lines, 0) / ok.length).toFixed(2) : 0;
+    const multi = ok.filter(r => r.lines >= 2).length;
+    const hit = re => rows.filter(r => r.text && re.test(r.text)).length;
     const counts = {};
-    for (const r of rows) counts[r.text] = (counts[r.text] || 0) + 1;
-    const dupes = Object.entries(counts).filter(([t, c]) => c > 1 && t && !/选择了沉默/.test(t))
-      .sort((a, b) => b[1] - a[1]);
-    md += `## ${prov}（${n} 条）\n\n`;
-    md += `| 指标 | 值 | 说明 |\n|---|---|---|\n`;
-    md += `| 调用失败 | ${err} (${(err / n * 100).toFixed(1)}%) | 网络或接口错误 |\n`;
-    md += `| 空回复／被剥空 | ${empty} (${(empty / n * 100).toFixed(1)}%) | 角色凭空变哑巴，越低越好 |\n`;
-    md += `| 平均字数 | ${avg} | |\n`;
-    md += `| 中位字数 | ${med} | 中位远小于平均＝偶发长篇大论 |\n`;
-    md += `| 最长 | ${lens[lens.length - 1] || 0} | 超过 60 字基本就是在讲道理 |\n`;
-    for (const [k, re] of Object.entries(PATTERNS)) {
-      const hit = rows.filter(r => r.text && re.test(r.text)).length;
-      md += `| ${k} | ${hit} (${(hit / n * 100).toFixed(1)}%) | ${k === '破设定' ? '出现一次就是致命的' : k === '括号动作' || k === '他人台词' ? '后处理漏网' : ''} |\n`;
+    for (const r of ok) counts[r.text] = (counts[r.text] || 0) + 1;
+    const dup = Object.values(counts).filter(v => v > 1).length;
+    md += `| L${lv.n} ${lv.label} | ${rows.length} | ${rows.length - ok.length} | ${avgLen} | ${avgLines} | `
+      + `${(multi / n * 100).toFixed(0)}% | ${hit(PATTERNS.提到岛)} | ${hit(PATTERNS.括号动作)} | `
+      + `${hit(PATTERNS.破设定)} | ${dup} |\n`;
+  }
+  md += `\n口头禅检查（各档开头三字重复情况）：\n\n`;
+  for (const lv of LEVELS) {
+    const heads = {};
+    for (const r of log.filter(x => x.level === lv.n && x.text)) {
+      for (const line of r.text.split('\n')) {
+        const h = line.trim().slice(0, 3);
+        if (h.length === 3) heads[h] = (heads[h] || 0) + 1;
+      }
     }
-    md += `| 完全重复的回复 | ${dupes.length} 组 | 模板化程度 |\n\n`;
-    if (dupes.length) {
-      md += `重复最多的几条：\n\n`;
-      for (const [t, c] of dupes.slice(0, 5)) md += `- ×${c}　${t.replace(/\n/g, ' / ').slice(0, 60)}\n`;
-      md += `\n`;
-    }
+    const top = Object.entries(heads).sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .filter(([, v]) => v > 1).map(([h, v]) => `${h}×${v}`).join('　') || '无重复开头';
+    md += `- L${lv.n} ${lv.label}：${top}\n`;
   }
 
-  md += `---\n\n## 原始样本（随机 24 条，供你判断口味）\n\n`;
-  const sample = log.filter(r => r.text && !/选择了沉默/.test(r.text))
-    .sort(() => Math.random() - 0.5).slice(0, 24);
-  for (const r of sample) {
-    md += `**你说：** ${r.input}\n\n`;
-    md += r.text.split('\n').map(l => `> ${l}`).join('\n') + `\n\n`;
-    md += `　像人 ☐1 ☐2 ☐3 ☐4 ☐5\n\n`;
+  md += `\n---\n\n## 原始样本（每档 5 条，供你打分）\n\n`;
+  for (const lv of LEVELS) {
+    md += `### L${lv.n} ${lv.label} —— ${lv.desc}（亲密度 ${lv.intimacy}）\n\n`;
+    const rows = log.filter(r => r.level === lv.n && r.text).sort(() => Math.random() - 0.5).slice(0, 5);
+    for (const r of rows) {
+      md += `**你说：** ${r.input}\n\n`;
+      md += r.text.split('\n').map(l => `> ${l}`).join('\n') + `\n\n`;
+      md += `　像人 ☐1 ☐2 ☐3 ☐4 ☐5　　符合这个熟悉度吗 ☐是 ☐太冷 ☐太热\n\n`;
+    }
+    md += `---\n\n`;
   }
 
-  const { writeFileSync } = await import('node:fs');
-  const f = `百轮压测-${new Date().toISOString().slice(0, 10)}.md`;
+  const f = `百轮压测-分层-${new Date().toISOString().slice(0, 10)}.md`;
   writeFileSync(f, md);
   writeFileSync(f.replace('.md', '.jsonl'), log.map(r => JSON.stringify(r)).join('\n'));
-  console.log(`\n报告：${f}\n全量：${f.replace('.md', '.jsonl')}`);
+  console.log(`\n报告：${f}`);
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+try { await main(); } catch (e) { cleanup(); console.error(e); process.exit(1); }
+process.exit(0);

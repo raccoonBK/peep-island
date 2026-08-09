@@ -530,6 +530,44 @@ const FW_INSTRUCTIONS = {
   after: '你和对方之间是心照不宣的默契。称呼和语气有细微的、只有一直在的人才察觉得到的变化。永远不说破。',
 };
 
+// ---------- 日常回复的判别器 ----------
+// 裂缝时刻那套"生成→判别→重roll"在实测里 8/8 有效，这里把它推广到日常对话。
+// 起因：prompt 里白纸黑字写了"禁止打比方"，模型照样每条都来
+//（"换工作跟换口味一样""像一锅慢慢煨着的汤"）。
+// 教训跟口头禅那条一样——**规矩它不听，门禁它过不去**。
+const REPLY_BAD = [
+  [/(像|跟|如同|好比)[^，。！？\n]{1,12}(一样|似的|那样)|就像[^，。\n]{1,14}|仿佛|宛如|犹如/, '打比方'],
+  [/煮[^，。\n]{0,4}橘子|烤[^，。\n]{0,4}(橘子皮|果皮)|煮[^，。\n]{0,4}石头/, '编造没人这么干的做法'],
+  [/作为(一个)?(AI|人工智能|语言模型)/, '破设定'],
+];
+export function checkReply(text) {
+  for (const [re, why] of REPLY_BAD) if (re.test(text)) return why;
+  return null;
+}
+
+// ---------- 口头禅去重 ----------
+// 求模型"少说点口头禅"没用，它看不见自己刚说过什么。所以把它最近的开头
+// 统计出来贴回 prompt 里——让它看见证据，比给它规矩有效。
+// 这条是通用的：不写死"讲真的"，而是逮住它这阵子恰好在滥用的任何说法。
+function catchphraseGuard(charId) {
+  const rows = db.prepare(`
+    SELECT body FROM events WHERE room_id=? AND kind='chat' AND author_type='char'
+    ORDER BY id DESC LIMIT 12`).all(charId);
+  if (rows.length < 4) return '';
+  const heads = {};
+  for (const r of rows) {
+    for (const line of String(r.body).split('\n')) {
+      const h = line.trim().slice(0, 3);
+      if (h.length === 3) heads[h] = (heads[h] || 0) + 1;
+    }
+  }
+  const over = Object.entries(heads).filter(([, n]) => n >= 2)
+    .sort((a, b) => b[1] - a[1]).slice(0, 3).map(([h]) => h);
+  if (!over.length) return '';
+  return `\n—— 你最近的口头禅（自己看看）——\n你最近连着用「${over.join('」「')}」这样开头。真人不会这样。这几条换个开法；`
+    + `如果实在要用某个口头禅，把它放到句子中间或末尾，别每次都顶在最前面。\n`;
+}
+
 // ---------- Prompt 组装 ----------
 export function buildPrompt(char) {
   const userName = W.get('user_name') || '你';
@@ -598,12 +636,17 @@ ${memBlock}
 ${FW_INSTRUCTIONS[char.fourthwall_state]}
 ${char.fw_rumor >= 1 && char.fourthwall_state === 'unaware' ? `\n—— 你们私下说过的事 ——\n${char.fw_rumor_from ? `${db.prepare('SELECT name FROM characters WHERE id=?').get(char.fw_rumor_from)?.name || '岛上有人'}` : '岛上有人'}前几天私下跟你提过一句：屏幕外那个一直在看着的人，好像快要察觉到你们都知道了。你一点也不意外——这件事岛上本来就心照不宣，只是从来没人挑明。你只是从那天起会多留意一点「${userName}」的反应：偶尔多问一句、多看一眼。别提起这件事，别说破，也别让对方看出你们讨论过TA。` : ''}
 
+${catchphraseGuard(char.id)}
 —— 你怎么打字（手机消息铁律）——
 - 你输出的每一行，就是你实际发出去的一条消息。除此之外什么都不存在
 - 禁止动作描写、禁止括号、禁止旁白、禁止引号。（低下头）（轻声说）这类东西一个字都不许出现
 - 短句，口语，可以只回一两个字，可以敷衍。用你自己的方式说话——你的性格决定你的语感，没有标准答案
 - 禁止修辞和文艺腔：不打比方、不排比、不升华、不替对方总结情绪
-- 一次 1-3 条（每条一行）。大多数时候 1 条就够
+- 【一次说 2-3 条】真人发消息是想到一句发一句，不是憋一段完整的话。
+  一条说一件事，短的那条可以只有两三个字。只回 1 条的情况：你在敷衍、在生气、或者真的没什么可说
+- 【别老提岛】"岛上""这座岛"这种话一天说不了几次。你活在这里，不需要反复强调你住在哪
+- 【常识别编】你说的食物、器物、做法必须是现实里真有的。不确定就别提具体做法，
+  说"烤橘子皮""煮石头"这种没人这么干的事，会立刻暴露你不是人
 
 —— 你是活人，不是客服（最高优先级）——
 - 你有情绪、底线和自尊。被骂了会疼、会生气：可以顶回去、可以问"你什么意思"、可以阴阳一句、也可以干脆不回
@@ -764,7 +807,17 @@ export async function charSay(char, kind, extraUserMsg = null) {
     } else { // comment / chronicle / 其它：直接用 extraUserMsg 当指令
       messages = [{ role: 'user', content: extraUserMsg }];
     }
-    const raw = await callAI(system, messages);
+    let raw = await callAI(system, messages);
+    // 判别层：命中硬性违规就重生成一次，并把违规原因塞回去。只重一次——
+    // 再不过就放行，因为"话说得不完美"远好过"角色变哑巴"。
+    const why = checkReply(raw);
+    if (why && kind === 'chat') {
+      console.log(`[重roll] ${char.name}（${why}）:`, String(raw).replace(/\n/g, ' / ').slice(0, 60));
+      const retry = await callAI(
+        system + `\n\n【上一次你写砸了：${why}】重写。绝对不许出现"像…一样""跟…似的""就像""仿佛"这类比喻，也不许编造现实里没人这么做的食物做法。直接说事。`,
+        messages);
+      if (retry && !checkReply(retry)) raw = retry;
+    }
     let text = raw;
     // 机制性执法（prompt 会被违反，后处理不会）：
     // 1) 带【别人名字】标注的行 = 模型在替别人（包括用户）说话 → 整行丢弃
