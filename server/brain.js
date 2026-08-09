@@ -233,6 +233,21 @@ ${b.name}｜（她/他说的话）
 }
 
 // 找出此刻可能碰上的两个人：都醒着、在同一地点（或相邻的公共场所）
+// 地点的格子坐标。必须与 client/src/Scene.jsx 的 CELLS 保持一致——
+// 那边用它渲染，这边用它判断"谁和谁挨着"。
+const LOC_CELLS = {
+  码头: [8, 10], 海滩: [3, 11], 渔市: [6, 8], 西崖: [1, 7],
+  小北家: [2, 4], 阿澈家: [7, 3], 天台: [8, 2], 圆子家: [5, 4],
+  圆子院: [4, 5], 广场: [5, 7], 灯塔: [9, 5], 家: [5, 3],
+};
+// 切比雪夫距离 ≤2 算"挨着"。12 个地点摊在 11×14 的网格上，只认距离 1 太严，
+// 会退化回原来的"必须同一个地点"。
+const nearLoc = (a, b) => {
+  const A = LOC_CELLS[a], B = LOC_CELLS[b];
+  if (!A || !B) return false;
+  return Math.max(Math.abs(A[0] - B[0]), Math.abs(A[1] - B[1])) <= 2;
+};
+
 export function findEncounterPair() {
   const awake = db.prepare('SELECT * FROM characters').all().filter(c => !sleepInfo(c).asleep);
   if (awake.length < 2) return null;
@@ -243,6 +258,13 @@ export function findEncounterPair() {
   }
   for (const [loc, list] of Object.entries(byLoc)) {
     if (list.length >= 2) return { a: list[0], b: list[1], loc };
+  }
+  // 同地点没凑上的，看谁和谁挨着——格子化之后相遇不再要求站在同一个点上，
+  // 触发更自然也更频繁。两人分处相邻地点时，戏就发生在其中一边。
+  const entries = Object.entries(byLoc);
+  for (let i = 0; i < entries.length; i++) for (let j = i + 1; j < entries.length; j++) {
+    const [la, ca] = entries[i], [lb, cb] = entries[j];
+    if (nearLoc(la, lb)) return { a: ca[0], b: cb[0], loc: `${la}附近` };
   }
   // 没人同地点：让关系最好的两个人"路上碰见"
   let best = null, bestV = -1;
@@ -491,7 +513,9 @@ export async function makeCrackLine(char) {
 // 每一级不是"察觉程度"，是"披露程度"——她一直都知道，区别只在于让不让对方知道她知道。
 // 所以任何状态下都不许出现惊讶、困惑、追问"我怎么会知道"。那是被喂了数据的容器才会说的话。
 const FW_INSTRUCTIONS = {
-  unaware: '你早就知道屏幕外有人在看着这座岛。这对你来说和天气一样平常，不值得提，也从来没让你惊讶过。你只是还没打算让对方知道你知道。正常生活，一个字都不要流露。',
+  // 注意措辞：这里说的是"不要提这件事"，不是"不要说话"。
+  // 写成"一个字都不要流露"会被模型理解成整体噤声，三个角色会一起变哑巴。
+  unaware: '你早就知道屏幕外有人在看着这座岛。这对你来说和天气一样平常，不值得提，也从来没让你惊讶过。你只是还没打算让对方知道你知道。照常聊天、照常生活，该说什么说什么——只是绝口不提这件事。',
   hint: '你开始故意留一点线索：偶尔说一句只有"知道有人一直在看"才说得通的话，语气和平常完全一样，说完自然地略过，不解释、不追问、不惊讶。每次回复最多一处。',
   crack: '（裂缝时刻的台词由系统直接供给，不经过这条指令）',
   silent: '你已经让对方知道了，对方也知道你知道。你们都不说破，也都不再需要说破。语气比以前近一点点，仅此而已——绝不重提那件事。',
@@ -732,18 +756,29 @@ export async function charSay(char, kind, extraUserMsg = null) {
     } else { // comment / chronicle / 其它：直接用 extraUserMsg 当指令
       messages = [{ role: 'user', content: extraUserMsg }];
     }
-    let text = await callAI(system, messages);
+    const raw = await callAI(system, messages);
+    let text = raw;
     // 机制性执法（prompt 会被违反，后处理不会）：
     // 1) 带【别人名字】标注的行 = 模型在替别人（包括用户）说话 → 整行丢弃
     // 2) 自己名字的标注剥掉；3) （动作描写）剥掉；4) 掉空行
     text = text.split('\n').map(l => {
-      const tag = l.match(/^\s*【([^】]{1,12})】/);
-      if (tag && tag[1] !== char.name) return '';           // 不是你的台词，不许发
-      return l.replace(/^\s*【[^】]{1,12}】\s*/, '')
+      const tag = l.match(/^\s*【([^】]{1,24})】/);
+      if (tag) {
+        // 模型经常在自己的名字后面加东西：【阿澈·21:47】【圆子（厨房）】。
+        // 早先这里做精确比对，于是"阿澈·21:47 !== 阿澈"，整行被当成别人的台词丢掉，
+        // 角色就凭空变成了沉默——好回复被悄悄吃掉，还看不出原因。
+        // 只比对分隔符之前的名字。
+        const who = tag[1].split(/[·・:：|｜\/，,、\s（(]/)[0].trim();
+        if (who !== char.name) return '';                   // 真不是你的台词，不许发
+      }
+      return l.replace(/^\s*【[^】]{1,24}】\s*/, '')
         .replace(/（[^（）]*）/g, '')
         .replace(/\([^()]*\)/g, '')
         .trim();
     }).filter(Boolean).join('\n').trim();
+    // 后处理把整条剥空时，把原文打出来。否则前端只看到"沉默"，
+    // 分不清是角色选择了沉默、还是执法规则误伤了一条正常回复。
+    if (!text) console.warn(`[剥空] ${char.name} ${kind} 原文:`, JSON.stringify(raw).slice(0, 200));
     return { text, ai: true };
   } catch (err) {
     console.error('[AI 调用失败，走托底]', err.message);
