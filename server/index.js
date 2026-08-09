@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db, W } from './db.js';
-import { charSay, advanceFourthwall, remember, timeSlot, sleepInfo, summarizeRoom, pickCrackLine, makeCrackLine, activityInfo, updateImpressions, getRel, bumpRel, makeEncounter, findEncounterPair, listProviders, setProvider } from './brain.js';
+import { charSay, advanceFourthwall, remember, timeSlot, sleepInfo, summarizeRoom, pickCrackLine, makeCrackLine, activityInfo, updateImpressions, getRel, bumpRel, makeEncounter, findEncounterPair, listProviders, setProvider, setKey } from './brain.js';
 
 const app = express();
 app.use(express.json());
@@ -180,6 +180,15 @@ app.post('/api/freeze', (req, res) => {
 });
 
 // ---------- AI 引擎（多 provider 快捷切换）----------
+// 在 UI 里填 key：存本地库，即时生效，不用改文件也不用重启。
+// 只接受写入，绝不回读明文——接口一律只返回后四位。
+app.put('/api/provider/:id/key', (req, res) => {
+  const r = setKey(req.params.id, req.body.key);
+  if (!r) return res.status(404).json({ error: 'no such provider' });
+  console.log(`[key] ${req.params.id} 已${r.hasKey ? '设置' : '清空'}`);   // 绝不打印内容
+  res.json({ ok: true, ...r, providers: listProviders() });
+});
+
 app.get('/api/providers', (req, res) => res.json({
   providers: listProviders(),
   lastError: W.get('last_ai_error') || null,

@@ -1,6 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import Avatar, { LOOK_DEFAULT, HAIR_STYLES, EYE_STYLES, MOUTH_STYLES, OUTFIT_STYLES } from './Avatar.jsx';
+import Avatar, { PixelAvatar, LOOK_DEFAULT, HAIR_STYLES, EYE_STYLES, MOUTH_STYLES, OUTFIT_STYLES } from './Avatar.jsx';
 import Scene, { LOCS, adjacent } from './Scene.jsx';
+
+// 岛上小人用哪种渲染：普通模式走矢量，墨水屏模式走真栅格化（见 Avatar.jsx 的 PixelAvatar）。
+// 之所以跟墨水屏绑在一起：低分辨率和有限灰阶是同一套视觉前提，分开开关只是徒增选项。
+const AvatarFor = (pixel) => (pixel ? PixelAvatar : Avatar);
 
 const api = async (path, body, method = 'POST') => {
   const r = await fetch(path, body && {
@@ -92,7 +96,7 @@ export default function App() {
       {room
         ? <ChatRoom charId={room} chars={state.characters} onBack={() => { setRoom(null); refresh(); }} frozen={state.frozen} />
         : tab === 'island'
-          ? <Island chars={state.characters} island={state.island} onPick={setCard} />
+          ? <Island chars={state.characters} island={state.island} onPick={setCard} pixel={eink > 0} />
           : tab === 'chats'
             ? <ChatList chars={state.characters} onOpen={setRoom} onChanged={refresh} />
             : <Feed frozen={state.frozen} />}
@@ -118,32 +122,76 @@ export default function App() {
 function ProviderPanel({ onClose }) {
   const [list, setList] = useState([]);
   const [lastError, setLastError] = useState(null);
+  const [editing, setEditing] = useState(null);   // 正在填 key 的引擎 id
   const load = () => api('/api/providers').then(d => { setList(d.providers || (Array.isArray(d) ? d : [])); setLastError(d.lastError || null); });
   useEffect(() => { load(); }, []);
   const pick = async (id) => { await api('/api/provider', { provider: id }); load(); };
   return (
     <div className="dev-panel">
       <div className="dev-title">
-        <span>AI 引擎 · 快捷测试</span>
+        <span>AI 引擎</span>
         <button className="icon-btn" onClick={onClose}>×</button>
       </div>
       <div className="dev-grid">
         {list.map(p => (
           <button key={p.id}
             className={'engine' + (p.active ? ' on' : '') + (p.hasKey ? '' : ' nokey')}
-            disabled={!p.hasKey}
-            onClick={() => pick(p.id)}
-            title={p.hasKey ? p.model : '未配置 key —— 在 server/.env 里填'}>
+            onClick={() => (p.hasKey ? pick(p.id) : setEditing(p.id))}
+            title={p.hasKey ? p.model : '点一下填 key'}>
             <b>{p.label}</b>
-            <small>{p.hasKey ? p.model : '无 key'}</small>
+            <small>{p.hasKey ? p.model : '点这里填 key'}</small>
             <i className="dot" />
           </button>
         ))}
       </div>
+
+      {/* key 直接在这里填，不用改文件也不用重启。存本地库，只回显后四位 */}
+      <div className="key-list">
+        {list.map(p => (
+          <div key={p.id} className="key-row">
+            <span className="key-name">{p.label}</span>
+            {editing === p.id
+              ? <KeyInput id={p.id} onDone={() => { setEditing(null); load(); }} />
+              : <>
+                <span className={'key-state' + (p.hasKey ? ' ok' : '')}>
+                  {p.hasKey ? p.hint : '未设置'}
+                  {p.hasKey && !p.fromUI && <i className="key-src">来自 .env</i>}
+                </span>
+                <button className="key-btn" onClick={() => setEditing(p.id)}>
+                  {p.hasKey ? '更换' : '填入'}
+                </button>
+              </>}
+          </div>
+        ))}
+      </div>
+
       <NameSetting />
-      <div className="dev-hint">key 从 server/.env 读取；切换即时对下一条消息生效。聊天框里用 <b>//开头</b> 发消息 = 对照实验：同一句话打给所有有key的引擎，不入库不加亲密。</div>
+      <div className="dev-hint">
+        key 存在本机 <b>island.db</b> 里，不上传任何服务器，界面只回显后四位；也可以继续用 <b>server/.env</b>。
+        填完即时生效，不用重启。聊天框里用 <b>//开头</b> 发消息 = 对照实验：同一句话打给所有有 key 的引擎，不入库不加亲密。
+      </div>
       {lastError && <div className="dev-error">⚠ 最近一次 AI 调用失败（已走脚本托底）：{lastError}</div>}
     </div>
+  );
+}
+
+function KeyInput({ id, onDone }) {
+  const [v, setV] = useState('');
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    await api(`/api/provider/${id}/key`, { key: v }, 'PUT');
+    setV('');                                   // 不在前端留存
+    onDone();
+  };
+  return (
+    <span className="key-edit">
+      <input type="password" autoFocus placeholder="粘贴 key" value={v}
+        onChange={e => setV(e.target.value)}
+        onKeyDown={e => e.key === 'Enter' && save()} />
+      <button className="key-btn" disabled={busy} onClick={save}>存</button>
+      <button className="key-btn ghost" onClick={onDone}>取消</button>
+    </span>
   );
 }
 
@@ -552,7 +600,8 @@ const basePos = (c) => LOCS[c.loc === '家' ? homeOf(c.id) : c.loc] || LOCS['广
 
 // 岛 = 主界面（朋友收集式）：小人在自己的日程位置上，头顶冒气泡告诉你他需要什么。
 // 点小人 → 角色卡（不是直接进聊天）。这是"观察者"的正确语法。
-function Island({ chars, island, onPick }) {
+function Island({ chars, island, onPick, pixel = false }) {
+  const Face = AvatarFor(pixel);
   const [wander, setWander] = useState({});
   const [rels, setRels] = useState([]);
   const [chron, setChron] = useState([]);
@@ -630,7 +679,7 @@ function Island({ chars, island, onPick }) {
               style={stage} onClick={() => !playing && onPick(c.id)}>
               {!playing && b && <span className={'bub ' + b.cls}>{b.icon}</span>}
               <span className="islander-avatar">
-                {c.look ? <Avatar look={c.look} size={inCast ? 46 : 30} speaking={speaking} /> : c.avatar}
+                {c.look ? <Face look={c.look} size={inCast ? 46 : 30} speaking={speaking} /> : c.avatar}
               </span>
               <span className="islander-name">{c.name}</span>
               {!playing && <span className="islander-doing">{c.activity}</span>}

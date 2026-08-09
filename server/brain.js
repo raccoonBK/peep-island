@@ -5,23 +5,38 @@ import { fallback } from './fallback.js';
 
 const DAILY_QUOTA = Number(process.env.DAILY_QUOTA || 5);
 
+// key 的两个来源：UI 里填的（存 world 表）优先于 .env。
+// 这样非开发者不用碰文件、不用重启就能接上自己的引擎。
+// 注意：存在本地 island.db 里，不出这台机器；日志和接口一律只回显后四位。
+const savedKey = (id) => (W.get('apikey:' + id) || '').trim();
+export function setKey(id, key) {
+  if (!PROVIDERS[id]) return null;
+  const v = String(key || '').trim();
+  if (v) W.set('apikey:' + id, v); else W.set('apikey:' + id, '');
+  return { id, hasKey: !!PROVIDERS[id].key() };
+}
+export const keyHint = (id) => {
+  const k = PROVIDERS[id]?.key() || '';
+  return k ? '••••' + k.slice(-4) : '';
+};
+
 // ---------- 多 provider（Claude 原生；DeepSeek/Kimi 走 OpenAI 兼容；Gemini 单独）----------
 const PROVIDERS = {
   claude: {
     label: 'Claude', kind: 'anthropic',
-    key: () => process.env.ANTHROPIC_API_KEY || '',
+    key: () => savedKey('claude') || process.env.ANTHROPIC_API_KEY || '',
     model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
     base: 'https://api.anthropic.com/v1/messages',
   },
   deepseek: {
     label: 'DeepSeek', kind: 'openai',
-    key: () => process.env.DEEPSEEK_API_KEY || '',
+    key: () => savedKey('deepseek') || process.env.DEEPSEEK_API_KEY || '',
     model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
     base: (process.env.DEEPSEEK_BASE || 'https://api.deepseek.com/v1') + '/chat/completions',
   },
   kimi: {
     label: 'Kimi', kind: 'openai',
-    key: () => process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY || '',
+    key: () => savedKey('kimi') || process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY || '',
     model: process.env.KIMI_MODEL || 'moonshot-v1-8k',            // 可换 kimi-latest / kimi-k2-0711-preview
     base: (process.env.KIMI_BASE || 'https://api.moonshot.cn/v1') + '/chat/completions',
   },
@@ -29,13 +44,13 @@ const PROVIDERS = {
     // OpenAI 兼容。注意区域：账号在哪个站点注册就用哪个域名（国际 api.minimax.io /
     // 国内站域名不同），连不上先换 MINIMAX_BASE。模型 id 以你控制台里能看到的为准。
     label: 'MiniMax', kind: 'openai',
-    key: () => process.env.MINIMAX_API_KEY || '',
+    key: () => savedKey('minimax') || process.env.MINIMAX_API_KEY || '',
     model: process.env.MINIMAX_MODEL || 'MiniMax-M3',
     base: (process.env.MINIMAX_BASE || 'https://api.minimax.io/v1') + '/chat/completions',
   },
   gemini: {
     label: 'Gemini', kind: 'gemini',
-    key: () => process.env.GEMINI_API_KEY || '',
+    key: () => savedKey('gemini') || process.env.GEMINI_API_KEY || '',
     model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
   },
 };
@@ -53,6 +68,7 @@ export function listProviders() {
   const active = activeProviderId();
   return Object.entries(PROVIDERS).map(([id, p]) => ({
     id, label: p.label, model: p.model, hasKey: !!p.key(), active: id === active,
+    hint: keyHint(id), fromUI: !!savedKey(id),
   }));
 }
 function activeProvider() { const id = activeProviderId(); return { id, ...PROVIDERS[id] }; }

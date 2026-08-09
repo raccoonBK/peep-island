@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 // 参数化头像：图层组装，不是贴图。
 // 每一层（发/眼/嘴/衣）都是一个可替换的渲染函数——以后换成你的美术资源时，
@@ -70,5 +70,60 @@ export default function Avatar({ look, size = 28, speaking = false }) {
         <Hair s={L.hairStyle} c={L.hair} />
       </g>
     </svg>
+  );
+}
+
+
+// ================= 像素化渲染 =================
+// 问题：CSS 滤镜没法把"活的 DOM"变成真像素画——image-rendering: pixelated
+// 只对位图生效，对矢量和文字无效。所以要真像素，必须先栅格化。
+//
+// 做法：把参数化 Avatar 序列化成 SVG → 画进一张很小的 canvas（关掉平滑，
+// 于是是最近邻点采样、边缘是硬的）→ 再用 CSS 放大回原尺寸。
+// 低分辨率是真的被"采样"掉的，不是模拟出来的。
+//
+// 好处是捏脸系统一点不用改：look JSON 照旧，只是最后多走一道栅格化。
+// 以后换成真正的像素纸娃娃图集时，替换的也只是这一层。
+export function PixelAvatar({ look, size = 28, res = 22, speaking = false }) {
+  const hidden = useRef(null);
+  const canvas = useRef(null);
+  const [ready, setReady] = useState(false);
+  const h = Math.round(res * 1.3);
+
+  useEffect(() => {
+    const svgEl = hidden.current?.querySelector('svg');
+    const cv = canvas.current;
+    if (!svgEl || !cv) return;
+    let dead = false;
+    const src = 'data:image/svg+xml;charset=utf-8,' +
+      encodeURIComponent(new XMLSerializer().serializeToString(svgEl));
+    const img = new Image();
+    img.onload = () => {
+      if (dead) return;
+      const ctx = cv.getContext('2d');
+      ctx.imageSmoothingEnabled = false;      // 最近邻：这一步决定了边缘是硬的
+      ctx.clearRect(0, 0, res, h);
+      ctx.drawImage(img, 0, 0, res, h);
+      setReady(true);
+    };
+    img.src = src;
+    return () => { dead = true; };
+  }, [JSON.stringify(look), res, h]);
+
+  return (
+    <>
+      {/* 隐藏的矢量原件，只用来序列化，不参与显示 */}
+      <div ref={hidden} style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden', opacity: 0 }} aria-hidden>
+        <Avatar look={look} size={64} />
+      </div>
+      <canvas
+        ref={canvas} width={res} height={h}
+        className={'pixel-avatar' + (speaking ? ' speaking' : '')}
+        style={{
+          width: size, height: size * 1.3, display: 'block',
+          imageRendering: 'pixelated', opacity: ready ? 1 : 0,
+        }}
+      />
+    </>
   );
 }

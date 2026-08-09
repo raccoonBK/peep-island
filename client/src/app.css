@@ -512,3 +512,25 @@ nav button.active { color: var(--accent-strong); font-weight: 600; }
 .moment p { font-size: 14px; line-height: 1.6; color: var(--text); }
 .comment { margin-top: 8px; background: var(--glass-2); border-radius: 8px; padding: 6px 10px; font-size: 13px; color: var(--text-dim); }
 .comment b { color: var(--text); }
+
+/* ---------- API key 管理（⚙️ 面板内）----------
+   key 存本机 island.db，界面只回显后四位。填完即时生效，不用重启。 */
+.key-list { margin: 10px 0 2px; display: flex; flex-direction: column; gap: 6px; }
+.key-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.key-name { width: 62px; color: var(--text); flex: none; }
+.key-state { flex: 1; color: var(--text-dim); font-family: ui-monospace, Menlo, monospace; }
+.key-state.ok { color: var(--text); }
+.key-src { margin-left: 6px; font-style: normal; font-size: 10px; opacity: .6; font-family: inherit; }
+.key-edit { flex: 1; display: flex; gap: 6px; }
+.key-edit input {
+  flex: 1; min-width: 0; padding: 5px 8px; font-size: 12px;
+  border-radius: 6px; border: 1px solid var(--glass-edge);
+  background: rgba(255, 255, 255, .06); color: var(--text);
+}
+.key-btn {
+  flex: none; padding: 5px 10px; font-size: 12px; border-radius: 6px;
+  border: 1px solid var(--glass-edge); background: rgba(255, 255, 255, .08);
+  color: var(--text); cursor: pointer;
+}
+.key-btn.ghost { background: transparent; color: var(--text-dim); }
+.key-btn:disabled { opacity: .5; cursor: default; }
