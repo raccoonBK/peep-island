@@ -25,6 +25,14 @@ const PROVIDERS = {
     model: process.env.KIMI_MODEL || 'moonshot-v1-8k',            // 可换 kimi-latest / kimi-k2-0711-preview
     base: (process.env.KIMI_BASE || 'https://api.moonshot.cn/v1') + '/chat/completions',
   },
+  minimax: {
+    // OpenAI 兼容。注意区域：账号在哪个站点注册就用哪个域名（国际 api.minimax.io /
+    // 国内站域名不同），连不上先换 MINIMAX_BASE。模型 id 以你控制台里能看到的为准。
+    label: 'MiniMax', kind: 'openai',
+    key: () => process.env.MINIMAX_API_KEY || '',
+    model: process.env.MINIMAX_MODEL || 'MiniMax-M3',
+    base: (process.env.MINIMAX_BASE || 'https://api.minimax.io/v1') + '/chat/completions',
+  },
   gemini: {
     label: 'Gemini', kind: 'gemini',
     key: () => process.env.GEMINI_API_KEY || '',
@@ -37,7 +45,7 @@ export function activeProviderId() {
   if (saved && PROVIDERS[saved]) return saved;
   const env = process.env.AI_PROVIDER;
   if (env && PROVIDERS[env]) return env;
-  for (const id of ['claude', 'deepseek', 'kimi', 'gemini']) if (PROVIDERS[id].key()) return id;
+  for (const id of ['claude', 'deepseek', 'kimi', 'minimax', 'gemini']) if (PROVIDERS[id].key()) return id;
   return 'claude';
 }
 export function setProvider(id) { if (!PROVIDERS[id]) return null; W.set('ai_provider', id); return id; }
