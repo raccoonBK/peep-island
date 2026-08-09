@@ -225,6 +225,16 @@ async function main() {
     md += `- L${lv.n} ${lv.label}：${top}\n`;
   }
 
+  // burstiness：长度的变异系数。人类聊天 CV 通常 >0.6，LLM 均匀输出 <0.4
+  md += `\n**burstiness（长度变异系数，越高越像人；LLM 天然偏低）**\n\n`;
+  for (const lv of LEVELS) {
+    const L = log.filter(r => r.level === lv.n && r.text).map(r => r.text.length);
+    if (!L.length) continue;
+    const m = L.reduce((a, b) => a + b, 0) / L.length;
+    const sd = Math.sqrt(L.reduce((a, b) => a + (b - m) ** 2, 0) / L.length);
+    md += `- L${lv.n} ${lv.label}：CV ${(sd / m).toFixed(2)}　（最短 ${Math.min(...L)} 字 / 最长 ${Math.max(...L)} 字）\n`;
+  }
+
   md += `\n---\n\n## 原始样本（每档 5 条，供你打分）\n\n`;
   for (const lv of LEVELS) {
     md += `### L${lv.n} ${lv.label} —— ${lv.desc}（亲密度 ${lv.intimacy}）\n\n`;

@@ -530,6 +530,24 @@ const FW_INSTRUCTIONS = {
   after: '你和对方之间是心照不宣的默契。称呼和语气有细微的、只有一直在的人才察觉得到的变化。永远不说破。',
 };
 
+// ---------- 回复形状采样（burstiness）----------
+// 文献里区分人类文本和 LLM 文本最稳的两个统计量是 perplexity 和 burstiness。
+// burstiness = 句长/结构的方差：人类聊天长短剧烈交替（"嗯" 之后跟着四十个字），
+// LLM 输出的长度高度均匀，挤在均值附近——这就是"AI 味"的统计本体。
+//
+// 关键判断：**不能求模型"多变化一点"，它必然回归均值。**
+// 所以由我先采样一个目标形状，再把形状当指令给它。方差是外部施加的，不是涌现的。
+// 顺带解决了连发不稳定：条数不再靠随机性，由亲密度调制的分布决定。
+function replyShape(char) {
+  const intimacy = Math.max(0, Math.min(100, char.intimacy || 0));
+  const multiChance = 0.12 + (intimacy / 100) * 0.38;   // 越熟越容易连着发
+  const r = Math.random();
+  if (r < 0.22) return '【这条的形状】只回一条，极短，最多六个字。可以是"嗯""在""知道了""哦"这种。不要解释，不要补充。';
+  if (r < 0.55) return '【这条的形状】只回一条，十几个字，说一件事就停。';
+  if (r < 0.55 + multiChance) return '【这条的形状】连着发 2-3 条，每条一行。长短要不一样——至少有一条只有三五个字。真人是想到一句发一句，不是憋一整段。';
+  return '【这条的形状】回一条稍长的，三四十字，把一件具体的事说完整。就这一条，别再补。';
+}
+
 // ---------- 日常回复的判别器 ----------
 // 裂缝时刻那套"生成→判别→重roll"在实测里 8/8 有效，这里把它推广到日常对话。
 // 起因：prompt 里白纸黑字写了"禁止打比方"，模型照样每条都来
@@ -537,6 +555,9 @@ const FW_INSTRUCTIONS = {
 // 教训跟口头禅那条一样——**规矩它不听，门禁它过不去**。
 const REPLY_BAD = [
   [/(像|跟|如同|好比)[^，。！？\n]{1,12}(一样|似的|那样)|就像[^，。\n]{1,14}|仿佛|宛如|犹如/, '打比方'],
+  // "像一锅慢慢煨着的汤"这种没有"一样"结尾，逃得过上面那条。
+  // 像 + 量词几乎必然是明喻（"好像""像是"不带量词，不会误伤）。
+  [/像[一两半]?[个只条根锅盆碗把张团片块颗粒扇道堵面]/, '打比方'],
   [/煮[^，。\n]{0,4}橘子|烤[^，。\n]{0,4}(橘子皮|果皮)|煮[^，。\n]{0,4}石头/, '编造没人这么干的做法'],
   [/作为(一个)?(AI|人工智能|语言模型)/, '破设定'],
 ];
@@ -802,6 +823,12 @@ export async function charSay(char, kind, extraUserMsg = null) {
       if (extraUserMsg) messages.push({ role: 'user', content: extraUserMsg });
       if (!messages.length || messages[messages.length - 1].role !== 'user')
         messages.push({ role: 'user', content: '（TA打开了和你的聊天界面，但还没说话。你可以主动说点什么，也可以[沉默]等TA先开口）' });
+      // 形状指令挂在最后一条 user 消息上——放 system 里模型会当成长期风格，
+      // 挂在这里它才理解成"就这一条这么写"。
+      messages[messages.length - 1] = {
+        ...messages[messages.length - 1],
+        content: messages[messages.length - 1].content + '\n\n' + replyShape(char),
+      };
     } else if (kind === 'moment') {
       messages = [{ role: 'user', content: '（以你的身份发一条朋友圈动态，一句话，贴合你的性格和现在的时段，不要提用户）' }];
     } else { // comment / chronicle / 其它：直接用 extraUserMsg 当指令
