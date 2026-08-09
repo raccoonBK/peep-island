@@ -1,0 +1,33 @@
+# Render Blueprint —— 从 GitHub 一键部署窥岛
+# 用法：render.com → New → Blueprint → 选中本仓库 → 在面板里填 key（下面 sync:false 的几项）
+services:
+  - type: web
+    name: peep-island
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: cd client && npm ci && npm run build && cd ../server && npm ci
+    startCommand: cd server && node index.js
+    envVars:
+      - key: NODE_VERSION
+        value: "20.18.0"
+
+      # —— 默认引擎 ——
+      - key: AI_PROVIDER
+        value: deepseek
+
+      # —— key：在 Render 面板里手填，不进仓库 ——
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: MOONSHOT_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+
+      # —— 公开部署务必压低配额，否则访客会烧光你的额度 ——
+      - key: DAILY_QUOTA
+        value: "10"
+      - key: CATCHUP_HOURS
+        value: "4"
