@@ -229,6 +229,9 @@ export async function makeEncounter(a, b, loc) {
 - ${b.name}：${b.persona_surface} 独处时：${b.persona_inner}
 他们的关系：${relTxt}。现在是${timeSlot()}。${a.name}正在${activityInfo(a).t}，${b.name}正在${activityInfo(b).t}。
 
+禁止打比方：不许出现"像…一样""跟…似的""就像""仿佛""宛如"。也不许编造现实里没人这么做的食物做法。
+禁止抒情和升华。旁白就是白描，台词就是人话。
+
 写一场 3 到 5 拍的小事件。格式严格如下，每行一拍：
 旁白｜（第三人称描述他们在做什么，像纪录片字幕，20字以内）
 ${a.name}｜（他说的话，口语，短）
@@ -546,6 +549,26 @@ const FW_INSTRUCTIONS = {
   after: '你和对方之间是心照不宣的默契。称呼和语气有细微的、只有一直在的人才察觉得到的变化。永远不说破。',
 };
 
+// ---------- 机制性执法（prompt 会被违反，后处理不会）----------
+// 抽出来是为了能被 自检.mjs 直接测——这一层出过两次悄无声息的回归，
+// 一次把角色的台词全当成别人的丢掉（角色凭空静默），必须有网兜着。
+export function enforce(raw, charName) {
+  return String(raw || '').split('\n').map(l => {
+    const tag = l.match(/^\s*【([^】]{1,24})】/);
+    if (tag) {
+      // 模型经常在自己的名字后面加东西：【阿澈·21:47】【圆子（厨房）】。
+      // 早先这里做精确比对，于是"阿澈·21:47 !== 阿澈"，整行被当成别人的台词丢掉，
+      // 角色就凭空变成了沉默——好回复被悄悄吃掉，还看不出原因。只比对分隔符之前的名字。
+      const who = tag[1].split(/[·・:：|｜\/，,、\s（(]/)[0].trim();
+      if (who !== charName) return '';                   // 真不是你的台词，不许发
+    }
+    return l.replace(/^\s*【[^】]{1,24}】\s*/, '')
+      .replace(/（[^（）]*）/g, '')
+      .replace(/\([^()]*\)/g, '')
+      .trim();
+  }).filter(Boolean).join('\n').trim();
+}
+
 // ---------- 回复形状采样（burstiness）----------
 // 文献里区分人类文本和 LLM 文本最稳的两个统计量是 perplexity 和 burstiness。
 // burstiness = 句长/结构的方差：人类聊天长短剧烈交替（"嗯" 之后跟着四十个字），
@@ -574,7 +597,9 @@ const REPLY_BAD = [
   // "像一锅慢慢煨着的汤"这种没有"一样"结尾，逃得过上面那条。
   // 像 + 量词几乎必然是明喻（"好像""像是"不带量词，不会误伤）。
   [/像[一两半]?[个只条根锅盆碗把张团片块颗粒扇道堵面]/, '打比方'],
-  [/煮[^，。\n]{0,4}橘子|烤[^，。\n]{0,4}(橘子皮|果皮)|煮[^，。\n]{0,4}石头/, '编造没人这么干的做法'],
+  // 中文的"把"字句动词在后（把橘子煮了），所以两个语序都要抓——
+  // 只写"煮…橘子"会漏掉用户当初贴的那句原话。
+  [/煮[^，。\n]{0,4}(橘子|石头)|(橘子|石头)[^，。\n]{0,4}煮|烤[^，。\n]{0,4}(橘子皮|果皮)|(橘子皮|果皮)[^，。\n]{0,4}烤/, '编造没人这么干的做法'],
   [/作为(一个)?(AI|人工智能|语言模型)/, '破设定'],
 ];
 export function checkReply(text) {
@@ -600,9 +625,33 @@ function catchphraseGuard(charId) {
   }
   const over = Object.entries(heads).filter(([, n]) => n >= 2)
     .sort((a, b) => b[1] - a[1]).slice(0, 3).map(([h]) => h);
-  if (!over.length) return '';
-  return `\n—— 你最近的口头禅（自己看看）——\n你最近连着用「${over.join('」「')}」这样开头。真人不会这样。这几条换个开法；`
-    + `如果实在要用某个口头禅，把它放到句子中间或末尾，别每次都顶在最前面。\n`;
+
+  // 意象黏着：只看开头抓不住"橘子/汤/粥"这种反复出现在句中的母题。
+  // 没有分词库，用二字窗口 + 虚词过滤近似——够用了，因为母题都是实词。
+  const STOP = /[的了是在我你他她它不也就都很和跟把被给对从这那个么什说要有没会能着过吗吧呢啊]/;
+  const grams = {};
+  for (const r of rows) {
+    const body = String(r.body).replace(/\s/g, '');
+    for (let i = 0; i + 2 <= body.length; i++) {
+      const g = body.slice(i, i + 2);
+      if (STOP.test(g)) continue;
+      grams[g] = (grams[g] || 0) + 1;
+    }
+  }
+  const motifs = Object.entries(grams).filter(([, n]) => n >= 3)
+    .sort((a, b) => b[1] - a[1]).slice(0, 4).map(([g]) => g);
+
+  if (!over.length && !motifs.length) return '';
+  let out = '\n—— 你最近说话的毛病（自己看看）——\n';
+  if (over.length) {
+    out += `你最近连着用「${over.join('」「')}」这样开头。真人不会这样。这几条换个开法；`
+      + `如果实在要用某个口头禅，把它放到句子中间或末尾，别每次都顶在最前面。\n`;
+  }
+  if (motifs.length) {
+    out += `你最近反复提「${motifs.join('」「')}」。你的生活不止这些东西——这几条换点别的说，`
+      + `不然对方会觉得你只会聊这一个话题。\n`;
+  }
+  return out;
 }
 
 // ---------- Prompt 组装 ----------
@@ -853,8 +902,11 @@ export async function charSay(char, kind, extraUserMsg = null) {
     let raw = await callAI(system, messages);
     // 判别层：命中硬性违规就重生成一次，并把违规原因塞回去。只重一次——
     // 再不过就放行，因为"话说得不完美"远好过"角色变哑巴"。
+    // 判别器覆盖所有走 charSay 的路径：聊天、朋友圈动态、评论、岛志。
+    // 一开始只挂了 chat，等于动态和评论仍然满屏打比方——它们同样在玩家眼前。
+    // （相遇小剧场不走这里，它有自己的 旁白｜/角色名｜ 格式，禁令写在它自己的 prompt 里）
     const why = checkReply(raw);
-    if (why && kind === 'chat') {
+    if (why) {
       console.log(`[重roll] ${char.name}（${why}）:`, String(raw).replace(/\n/g, ' / ').slice(0, 60));
       const retry = await callAI(
         system + `\n\n【上一次你写砸了：${why}】重写。绝对不许出现"像…一样""跟…似的""就像""仿佛"这类比喻，也不许编造现实里没人这么做的食物做法。直接说事。`,
@@ -865,21 +917,7 @@ export async function charSay(char, kind, extraUserMsg = null) {
     // 机制性执法（prompt 会被违反，后处理不会）：
     // 1) 带【别人名字】标注的行 = 模型在替别人（包括用户）说话 → 整行丢弃
     // 2) 自己名字的标注剥掉；3) （动作描写）剥掉；4) 掉空行
-    text = text.split('\n').map(l => {
-      const tag = l.match(/^\s*【([^】]{1,24})】/);
-      if (tag) {
-        // 模型经常在自己的名字后面加东西：【阿澈·21:47】【圆子（厨房）】。
-        // 早先这里做精确比对，于是"阿澈·21:47 !== 阿澈"，整行被当成别人的台词丢掉，
-        // 角色就凭空变成了沉默——好回复被悄悄吃掉，还看不出原因。
-        // 只比对分隔符之前的名字。
-        const who = tag[1].split(/[·・:：|｜\/，,、\s（(]/)[0].trim();
-        if (who !== char.name) return '';                   // 真不是你的台词，不许发
-      }
-      return l.replace(/^\s*【[^】]{1,24}】\s*/, '')
-        .replace(/（[^（）]*）/g, '')
-        .replace(/\([^()]*\)/g, '')
-        .trim();
-    }).filter(Boolean).join('\n').trim();
+    text = enforce(text, char.name);
     // 后处理把整条剥空时，把原文打出来。否则前端只看到"沉默"，
     // 分不清是角色选择了沉默、还是执法规则误伤了一条正常回复。
     if (!text) console.warn(`[剥空] ${char.name} ${kind} 原文:`, JSON.stringify(raw).slice(0, 200));

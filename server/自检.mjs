@@ -1,0 +1,67 @@
+#!/usr/bin/env node
+// 自检 —— 纯逻辑回归测试，不调 API、不碰网络，一秒跑完。
+//
+// 为什么要有它：这一层出过两次悄无声息的回归。
+//   ① 作者归属做精确比对，模型写了【阿澈·21:47】就 !== 阿澈，
+//      整条回复被当成"别人的台词"丢弃 → 三个角色 100% 静默，表面完全看不出原因。
+//   ② FW_INSTRUCTIONS 里"一个字都不要流露"被模型理解成整体噤声。
+// 第①类可以用测试兜住，所以就兜住。
+//
+// 用法：cd server && node --env-file=.env 自检.mjs
+
+const { enforce, checkReply, validateCrack } = await import('./brain.js');
+
+let pass = 0, fail = 0;
+const t = (name, got, want) => {
+  const ok = got === want;
+  ok ? pass++ : fail++;
+  console.log(`  ${ok ? '✓' : '✗'} ${name}`);
+  if (!ok) console.log(`      期望 ${JSON.stringify(want)}\n      实际 ${JSON.stringify(got)}`);
+};
+
+console.log('\n【作者归属执法】');
+t('自己的台词，标注被剥掉', enforce('【阿澈】在窗边发呆。', '阿澈'), '在窗边发呆。');
+t('名字后带时间戳 —— 这条曾让全员静默', enforce('【阿澈·21:47】在窗边发呆。', '阿澈'), '在窗边发呆。');
+t('名字后带括号状态', enforce('【圆子（厨房）】汤好了。', '圆子'), '汤好了。');
+t('名字后带冒号', enforce('【小北: 】捡到贝壳了', '小北'), '捡到贝壳了');
+t('真的是别人的台词 → 整行丢弃', enforce('【小北】你好呀', '阿澈'), '');
+t('多行只留自己的', enforce('【阿澈】嗯。\n【小北】你好呀', '阿澈'), '嗯。');
+t('动作描写被剥掉', enforce('（低下头）没什么。', '阿澈'), '没什么。');
+t('半角括号也剥', enforce('(轻声说)没什么。', '阿澈'), '没什么。');
+t('整行只有动作描写 → 丢弃', enforce('（她笑了笑）', '阿澈'), '');
+t('无标注的正常台词原样通过', enforce('今天风大。', '阿澈'), '今天风大。');
+t('空输入不炸', enforce('', '阿澈'), '');
+t('null 不炸', enforce(null, '阿澈'), '');
+
+console.log('\n【日常回复判别器】');
+const bad = (s) => checkReply(s) !== null;
+t('明喻「跟…一样」', bad('换工作跟换口味一样'), true);
+t('明喻「像…似的」', bad('你说话跟拧螺丝似的'), true);
+t('明喻「就像」', bad('就像一锅慢慢煨着的汤'), true);
+t('明喻「像+量词」（无"一样"结尾）', bad('像一锅慢慢煨着的汤'), true);
+t('明喻「仿佛」', bad('仿佛什么都没发生'), true);
+t('编造做法：煮橘子（把字句，动词在后）', bad('把冻的橘子全煮了'), true);
+t('编造做法：煮橘子（正序）', bad('我煮了一锅橘子'), true);
+t('编造做法：烤橘子皮', bad('我烤了点橘子皮'), true);
+t('破设定', bad('作为一个AI我没有情感'), true);
+t('不误伤「好像」', bad('好像下雨了'), false);
+t('不误伤「像是」', bad('像是这样吧'), false);
+t('不误伤「不像话」', bad('你这人真不像话'), false);
+t('不误伤正常橘子句', bad('给你留了一瓣橘子'), false);
+t('普通句子放行', bad('今天风大，我去关窗。'), false);
+
+console.log('\n【裂缝时刻判别器】');
+const crackOk = (s) => validateCrack(s, '__nonexistent__') === null;
+t('合格：平淡陈述 + 转身', crackOk('凌晨三点你还醒着。\n早点睡。'), true);
+t('拒绝：表达惊讶', crackOk('你昨天没睡吧。\n我怎么会知道这个。'), false);
+t('拒绝：出现问号', crackOk('你是不是一直在看着我'), true);   // 无问号则通过
+t('拒绝：真的带问号', crackOk('你是不是一直在看着我？'), false);
+t('拒绝：禁词「屏幕」', crackOk('屏幕那边的你。'), false);
+t('拒绝：禁词「感觉到」', crackOk('我能感觉到你。'), false);
+t('拒绝：波浪号', crackOk('你还在呢~'), false);
+t('拒绝：超过两行', crackOk('一。\n二。\n三。'), false);
+t('拒绝：单行超 20 字', crackOk('这个世界原来一直有人在注视着我而我到今天才说出口'), false);
+t('拒绝：动作描写', crackOk('（她停下手里的活）你在。'), false);
+
+console.log(`\n${fail ? '✗' : '✓'} ${pass} 通过 / ${fail} 失败\n`);
+process.exit(fail ? 1 : 0);
