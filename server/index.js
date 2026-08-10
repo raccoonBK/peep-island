@@ -27,21 +27,46 @@ function addEvent({ authorId, authorType, kind, roomId, targetId = null, body, m
 }
 
 // 首次见面：每个空房间投一条手写引导消息（不烧 API，错峰送达）——开局不能是三个死寂的房间
+// 引导语按时段分岔：阿澈原来固定说"这个点还醒着说明你也睡不着"，
+// 但他是夜猫子、白天在补觉——一个睡着的人在上午十一点跟你说这句，
+// 第一分钟就穿帮了。首开是评委和新玩家唯一的第一印象，不能带这种伤。
 const INTROS = {
-  xiaobei: '你好呀！我是小北！刚在海边捡到一块超圆的石头，摸起来滑滑的。你叫什么呀？',
-  ache: '……你好。我是阿澈。这个点还醒着的话，说明你也睡不着。',
-  yuanzi: '来啦？我是圆子。刚剥了个橘子，比昨天那个甜。给你留一瓣——哦对，你在那边。那我记着这瓣是你的。',
+  xiaobei: () => '你好呀！我是小北！刚在海边捡到一块超圆的石头，摸起来滑滑的。你叫什么呀？',
+  ache: () => (timeSlot() === '深夜'
+    ? '……你好。我是阿澈。这个点还醒着的话，说明你也睡不着。'
+    : '……你好。我是阿澈。刚醒，脑子还没转过来。'),
+  yuanzi: () => '来啦？我是圆子。刚剥了个橘子，比昨天那个甜。给你留一瓣——哦对，你在那边。那我记着这瓣是你的。',
 };
 function seedIntros() {
+  let seeded = 0;
   for (const c of chars()) {
     const n = db.prepare(`SELECT COUNT(*) n FROM events WHERE room_id=? AND kind='chat'`).get(c.id).n;
     if (n === 0 && INTROS[c.id]) {
+      // 睡着的人不会发消息。醒了再说——把投递推到他醒来之后一小会儿。
+      const sleep = sleepInfo(c);
+      const base = sleep.asleep ? sleep.wakeAt : now();
+      // 第一条要快（3-12s，让你还在看的时候就有动静），后面的错峰，别一起涌进来。
+      const jitter = (3 + Math.floor(Math.random() * 9) + seeded * 40) * 1000;
+      seeded += 1;
       addEvent({
         authorId: c.id, authorType: 'char', kind: 'chat', roomId: c.id,
-        body: INTROS[c.id], read: 0, deliverAt: now() + (20 + Math.floor(Math.random() * 160)) * 1000,
+        body: INTROS[c.id](), read: 0, deliverAt: base + jitter,
       });
     }
   }
+}
+
+// 岛屿等级 = 积累量，不是幸福度。
+// 原来写的是 floor(幸福/10)，初始幸福 60 → 全新的岛开局就显示 Lv.6：
+// 既没赚来也不会涨，它只是幸福度换了个说法。改成看真正攒下来的东西
+// （记忆 + 剧场 + 岛志 + 羁绊），于是新岛从 1 开始，玩得越久越高。
+// 用平方根曲线：前期涨得快（能看见反馈），后期放缓（不通胀）。
+function islandLevel(archive) {
+  // 只算"你在场时发生过的事"：记忆、岛志、剧场。
+  // 羁绊不计入——种子角色开局就有关系，而且他们的关系会自己长，那不是你的积累。
+  // 羁绊本来就有自己的计数器在岛页显示，不必再折进等级里。
+  const total = archive.memories + archive.chronicle * 2 + archive.encounters * 3;
+  return Math.max(1, Math.floor(Math.sqrt(total / 2)) + 1);
 }
 
 // ---------- onOpen：唯一的生成时机（生成放后台，打开必须秒开）----------
@@ -212,11 +237,12 @@ app.get('/api/state', (req, res) => {
     chronicle: db.prepare('SELECT COUNT(*) n FROM chronicle').get().n,
     encounters: db.prepare('SELECT COUNT(*) n FROM encounters').get().n,
     bonds: db.prepare('SELECT COALESCE(SUM(value),0) n FROM relationships').get().n,
+    pairs: db.prepare('SELECT COUNT(*) n FROM relationships').get().n,
   };
   res.json({
     frozen: W.get('frozen') === '1',
     slot: timeSlot(),
-    island: { level: Math.max(1, Math.floor(avgHappy / 10)), happiness: avgHappy, population: all.length, archive },
+    island: { level: islandLevel(archive), happiness: avgHappy, population: all.length, archive },
     characters: chars().map(c => ({
       id: c.id, name: c.name, avatar: c.avatar, look: c.look ? JSON.parse(c.look) : null,
       intimacy: c.intimacy, fourthwall_state: c.fourthwall_state,
